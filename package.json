@@ -4,6 +4,9 @@
   "description": "🧠 Persistent memory + 🔍 session search + 🛡️ secret scanning for Pi. Token-aware policy-only memory by default, SQLite FTS5 search, auto-consolidation, procedural skills. 732 tests. Ported from Hermes agent.",
   "type": "module",
   "main": "src/index.ts",
+  "bin": {
+    "pi-hermes-curator": "scripts/curator.mjs"
+  },
   "files": [
     "src",
     "scripts",
@@ -62,6 +65,7 @@
   "dependencies": {
     "@earendil-works/pi-tui": "^0.80.2",
     "better-sqlite3": "^13.0.3",
+    "jiti": "2.7.0",
     "strip-ansi": "7.2.0"
   }
 }

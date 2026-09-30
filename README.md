@@ -444,12 +444,18 @@ After a complex task (8+ tool calls using 2+ different tools in a single turn), 
 
 This means skills build up naturally over time without you having to ask.
 
+### Skill Curator (단계 E: 독립 주기 실행)
+
+Curator는 확인된 관리 대상의 조건부 제거 엔진을 제공합니다. 스킬별 승인·삭제 이력·알림·보관·복원은 없으며, 조건·세대·활성 캐시를 직전에 다시 확인합니다. `node scripts/curator.mjs --watch --interval-minutes <간격>`으로 Pi 밖에서 주기 실행할 수 있습니다. 예약 작업·데몬은 자동 설치하지 않습니다.
+`curatorEnabled: false`로 전체 기능을, `curatorPaused: true`로 제거만 중지할 수 있습니다. 저장 방식과 제한은 [Curator 문서](docs/curator/README.md)를 참고하세요.
+
 ### Commands
 
 | Command | What it does |
 |---|---|
 | `/memory-insights` | Shows everything stored in memory and user profile |
 | `/memory-skills` | Opens an interactive skills manager for search, multi-select, move, and delete |
+| `/memory-curator [status\|inventory\|dry-run\|remove]` | 상태·후보 조회 또는 조건부 무알림 제거 |
 | `/memory-consolidate` | Manually trigger memory consolidation to free space |
 | `/memory-interview` | Answer a few questions to pre-fill your user profile |
 | `/memory-switch-project` | List all project memories and their entry counts |
