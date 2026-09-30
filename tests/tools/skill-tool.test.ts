@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 import { registerSkillTool, SKILL_MANAGE_TOOL_NAME } from "../../src/tools/skill-tool.js";
 import { SkillStore } from "../../src/store/skill-store.js";
+import { COMBINED_REVIEW_PROMPT, DIRECT_REVIEW_SYSTEM_PROMPT } from "../../src/constants.js";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs/promises";
@@ -55,6 +56,40 @@ describe("registerSkillTool", () => {
     assert.ok(captured.promptSnippet.length > 0);
     assert.ok(Array.isArray(captured.promptGuidelines));
     assert.ok(captured.parameters);
+  });
+
+  for (const surface of ["promptGuidelines", "description"] as const) {
+    it(`${surface} requires confirmed reuse value before autonomous skill creation`, async () => {
+      let captured: any;
+      const mockPi = {
+        registerTool: (def: any) => { captured = def; },
+      } as any;
+
+      const store = await makeStore();
+      try {
+        registerSkillTool(mockPi, store);
+        const guidance = surface === "promptGuidelines"
+          ? captured.promptGuidelines.join("\n")
+          : captured.description;
+
+        assert.match(guidance, /all four reuse criteria/i);
+        assert.match(guidance, /concrete future reuse.*when.*look up/i);
+        assert.match(guidance, /independent procedure.*task outcomes.*incident reports.*temporary environment/i);
+        assert.match(guidance, /existing skills.*check.*inspect.*prefer.*patch.*update.*creating/i);
+        assert.match(guidance, /materially reduces.*future effort.*ordinary commands.*easy.*rediscover/i);
+        assert.match(guidance, /complexity.*trial and error.*multiple tool calls alone do not justify/i);
+        assert.match(guidance, /user explicitly asks to save a skill/i);
+        assert.match(guidance, /uncertain.*do not create.*durable facts.*memory.*otherwise save nothing/i);
+        assert.doesNotMatch(guidance, /after completing (?:a )?complex tasks? that required trial and error or multiple tool calls/i);
+      } finally {
+        await cleanup();
+      }
+    });
+  }
+
+  it("keeps background reviews from creating or modifying skills", () => {
+    assert.match(COMBINED_REVIEW_PROMPT, /Do NOT create or modify skills in this background review/);
+    assert.match(DIRECT_REVIEW_SYSTEM_PROMPT, /Do NOT create or modify skills/);
   });
 
   it("create requires name, description, a body or structured fields, and scope", async () => {

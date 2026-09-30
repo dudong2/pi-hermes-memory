@@ -7,7 +7,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { SkillStore } from "../store/skill-store.js";
-import { SKILL_TOOL_DESCRIPTION } from "../constants.js";
+import { SKILL_CREATION_GUIDELINES, SKILL_TOOL_DESCRIPTION } from "../constants.js";
 import { createSharedToolResultRenderer } from "./shared-output-view.js";
 import { skillResultView } from "./tool-result-views.js";
 
@@ -96,7 +96,7 @@ export function registerSkillTool(pi: ExtensionAPI, store: SkillStore): void {
     description: SKILL_TOOL_DESCRIPTION,
     promptSnippet: "Create, inspect, and update reusable procedures and patterns",
     promptGuidelines: [
-      "Use the skill_manage tool after completing complex tasks that required trial and error or multiple tool calls.",
+      ...SKILL_CREATION_GUIDELINES,
       "Use 'create' to save a new reusable procedure, 'patch' to update a section of an existing skill by skill_id, and 'update' for a full rewrite.",
       "Scope is required on create: choose scope='global' for transferable procedures and scope='project' when the workflow depends on this repo's paths, scripts, conventions, or deploy steps.",
       "Prefer structured fields for create/update/patch: when_to_use, procedure_steps, pitfalls, and verification_steps. The tool renders valid SKILL.md sections for you.",

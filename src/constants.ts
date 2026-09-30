@@ -382,6 +382,16 @@ Priority:
 Use memory_add or memory_replace to save. If this contradicts an existing entry, use memory_replace to update it.`;
 
 // ─── Skill tool description ───
+// Keep creation policy identical in the tool description and main-agent guidelines.
+export const SKILL_CREATION_GUIDELINES = [
+  "Create a new skill only when the user explicitly asks to save a skill, or when all four reuse criteria below are met. Task complexity, trial and error, and multiple tool calls alone do not justify creation.",
+  "1. Concrete future reuse: explain when you would look up this skill again.",
+  "2. Independent procedure: capture a reusable workflow, not task outcomes, incident reports, investigation summaries, or temporary environment information.",
+  "3. Not covered by existing skills: check the loaded skill index/context and inspect related skills before creating; prefer patch or update over creating a duplicate.",
+  "4. Materially reduces future effort: preserve non-obvious, repeatable steps that save real work, not a few ordinary commands or explanations that are easy to rediscover.",
+  "If reuse value is uncertain, do not create a skill. Save only genuinely durable facts to memory when useful; otherwise save nothing.",
+] as const;
+
 export const SKILL_TOOL_DESCRIPTION = `Manage reusable procedures and patterns as Pi-native skills that survive across sessions. Skills are procedural memory — they capture HOW to do something, not just what happened.
 
 This tool is intentionally named 'skill_manage' because it manages saved procedural skills; it is not a generic skill-discovery tool.
@@ -389,9 +399,7 @@ This tool is intentionally named 'skill_manage' because it manages saved procedu
 Use create for a new skill, patch for a targeted section update, update for a full rewrite, view to inspect existing skills, and delete to remove obsolete ones. When creating a skill, scope is required: use global for portable workflows and project for procedures tied to this repo's paths, scripts, architecture, deploy steps, or conventions.
 
 WHEN TO CREATE A SKILL:
-- After completing a complex task that required trial and error or multiple tool calls
-- When you discover a non-obvious approach that could be reused
-- When the user teaches you a specific workflow or procedure
+${SKILL_CREATION_GUIDELINES.join("\n")}
 
 SCOPE:
 - 'global': transferable procedures that can be reused across repositories. Written to ~/.pi/agent/pi-hermes-memory/skills/<slug>/SKILL.md, this extension's own directory, kept separate from skills the user installed themselves. Pi also loads its own ~/.pi/agent/skills/ first, so a name already used there is rejected rather than silently shadowed.
