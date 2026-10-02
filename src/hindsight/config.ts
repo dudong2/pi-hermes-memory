@@ -24,7 +24,7 @@ export interface OrchestratorConfig {
 const DEFAULT_CONFIG_PATH = join(
   homedir(),
   ".config",
-  "pi-memory-orchestrator",
+  "pi-hermes-memory",
   "config.json",
 );
 
@@ -42,7 +42,7 @@ export const DEFAULT_CONFIG: OrchestratorConfig = {
   maxRecallTokens: 4_096,
   recallTypes: ["observation"],
   preferObservations: false,
-  dataDir: join(homedir(), ".config", "pi-memory-orchestrator"),
+  dataDir: join(homedir(), ".config", "pi-hermes-memory"),
   markerName: ".pi-memory-scope.json",
 };
 

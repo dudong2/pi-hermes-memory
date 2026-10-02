@@ -16,7 +16,7 @@ test("parseConfig returns safe shadow defaults", () => {
   assert.equal(config.markerName, ".pi-memory-scope.json");
   assert.equal(
     config.dataDir,
-    join(homedir(), ".config", "pi-memory-orchestrator"),
+    join(homedir(), ".config", "pi-hermes-memory"),
   );
 });
 
@@ -36,7 +36,7 @@ test("loadConfig retains an unmigrated legacy catalog unless dataDir is explicit
   const home = mkdtempSync(join(tmpdir(), "orchestrator-config-"));
   try {
     const legacy = join(home, ".local", "share", "pi-memory-orchestrator");
-    const current = join(home, ".config", "pi-memory-orchestrator");
+    const current = join(home, ".config", "pi-hermes-memory");
     mkdirSync(legacy, { recursive: true });
     mkdirSync(current, { recursive: true });
     writeFileSync(join(legacy, "scope-catalog.json"), "{}");

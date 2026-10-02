@@ -39,17 +39,13 @@ process checks, shutdowns, or instructions.
    next. Do not create /memory-manage, a new service, a generic workflow engine
    or another backend. Locate the installed commands and current source rather
    than assuming legacy Orchestrator code owns them.
-4. For a merge, read the completed receipt and helpers in
-   ~/.config/pi-memory-orchestrator/backups/hermes-scope-merge-final-20261002T105620Z/.
-   Reuse the verified functions
-   migrate_database/rewrite_tags/rewrite_references, planLocal/localMerge,
-   captureSessions/cleanupSessions, and
-   drainWithBackoff/existingOperationAwareClient as needed. Inspect their bodies
-   and input contracts first. This directory is a historical reference, not a
-   runnable plan for new targets: do not rerun run_merge.py, its old plan, old
-   receipts, or its hard-coded PID allowance. Use a small operation-local
-   invocation of the existing helpers only after adapting and validating the
-   actual targets; do not copy them into a new repository implementation.
+4. For a merge, inspect the current installed APIs and available migration
+   helpers before planning execution. Previously used one-shot backups and
+   scripts were removed; do not assume their functions or receipts still exist.
+   A lossless ID-preserving Hindsight routing migration needs verified tooling
+   for the current schema and a fresh, independent recovery backup. If those
+   prerequisites are unavailable, stop rather than using a normal tag change
+   that regenerates observations or inventing an untested replacement.
 5. Preview and confirm the exact source/destination identities, memory/skill
    treatment, whether retired-source session cleanup is included, and any
    Hindsight interruption. Check active Pi writers, cached source sessions and
@@ -114,9 +110,8 @@ process checks, shutdowns, or instructions.
 - Project ownership changes are not identity changes. Project-wide moves must
   not automatically concatenate Scope memories or silently resolve duplicate
   Scope names.
-- Historical backups and completed plans are recovery/provenance data. Preserve
-  them, do not execute them unchanged, and do not hard-code their IDs, counts,
-  paths or PID into new operations.
+- Do not rely on historical one-shot backups: they may no longer exist. Never
+  hard-code their IDs, counts, paths or PIDs into a new operation.
 - Do not add new product code merely to make this operational procedure
   reusable. Prefer existing commands and verified helper invocations; request a
   separate implementation decision only if a genuinely missing capability cannot

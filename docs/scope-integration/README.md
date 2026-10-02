@@ -141,7 +141,7 @@
 - **기본값은 `hindsightEnabled: false`다.** 비활성 상태에서는 기존 Hindsight
   설정·자격 증명·outbox를 읽거나 만들지 않고 관련 도구·콜백을 등록하지 않는다.
 - `hindsightSettingsPath`를 생략하면 기존 `PI_MEMORY_ORCHESTRATOR_CONFIG` 또는
-  `~/.config/pi-memory-orchestrator/config.json`을 재사용한다. `dataDir`, bank,
+  `~/.config/pi-hermes-memory/config.json`에서 설정을 읽는다. `dataDir`, bank,
   API 설정과 원래 자격 증명 파일을 유지하며 새로운 토큰 저장소를 만들지 않는다.
 - 서비스 설정의 `dataDir`와 Hermes의 `scopeCatalogDir`가 동일한 카탈로그를
   가리켜야 활성화된다. 다른 위치를 새 저장소로 추정해 시작하지 않는다.
