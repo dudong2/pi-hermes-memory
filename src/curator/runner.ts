@@ -93,7 +93,7 @@ export async function runCuratorCycle(options: { agentRoot: string; signal?: Abo
     if (!current?.enabled || current.paused || options.signal?.aborted
       || current.globalRoot !== config.globalRoot || current.projectsRoot !== config.projectsRoot
       || current.resolutionMode !== config.resolutionMode || current.scopeCatalogDir !== config.scopeCatalogDir
-      || JSON.stringify([...(current.scopeKeys ?? [])].sort()) !== JSON.stringify([...(config.scopeKeys ?? [])].sort())) return null;
+      || JSON.stringify([...(current.scopeKeys ?? [])].sort((a, b) => a.localeCompare(b))) !== JSON.stringify([...(config.scopeKeys ?? [])].sort((a, b) => a.localeCompare(b)))) return null;
     return current.policy;
   };
   try {

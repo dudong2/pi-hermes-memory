@@ -95,8 +95,9 @@ export class ProjectScopeBinding {
       }
       if (record.kind === "repository" && (!git || record.repositoryId !== git.repositoryId)) return { ...EMPTY };
       if (record.kind === "directory" && git) return { ...EMPTY };
-      const project = this.catalog.projects[record.projectId!];
-      if (!project || !safeScopeKey(record.scopeId)) return { ...EMPTY };
+      if (!record.projectId || !safeScopeKey(record.scopeId)) return { ...EMPTY };
+      const project = this.catalog.projects[record.projectId];
+      if (!project) return { ...EMPTY };
       return { name: record.scopeId, scopeId: record.scopeId,
         displayName: `${project.name}/${record.name}`,
         memoryDir: path.join(this.projectsRoot, record.scopeId) };
@@ -108,7 +109,8 @@ export class ProjectScopeBinding {
     if (Object.prototype.hasOwnProperty.call(this.catalog.scopes, value)) return value;
     const wanted = value.normalize("NFC").toLocaleLowerCase("en-US");
     const matches = Object.values(this.catalog.scopes).filter((scope) => {
-      const project = this.catalog.projects[scope.projectId!];
+      const project = scope.projectId ? this.catalog.projects[scope.projectId] : undefined;
+      if (!project) return false;
       const names = [scope.name, ...(scope.aliases ?? [])];
       const qualified = [project.name, ...(project.aliases ?? [])].flatMap((name) => names.map((scopeName) => `${name}/${scopeName}`));
       return [...names, ...qualified].some((name) => name.normalize("NFC").toLocaleLowerCase("en-US") === wanted);

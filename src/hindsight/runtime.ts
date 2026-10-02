@@ -312,13 +312,17 @@ class OrchestratorRuntime {
 
   private async recallScope(prompt: string, ctx: ExtensionContext) {
     const scope = await this.ensureScope(ctx.cwd, ctx, true);
+    if (!scope) return { scope, outcome: null };
+    const signals = [
+      this.sessionLifetime.signal,
+      AbortSignal.timeout(this.config.targetTimeoutMs),
+    ];
+    if (ctx.signal) signals.push(ctx.signal);
     return {
       scope,
-      outcome: scope
-        ? await this.provider.recall(prompt, scope, { signal: AbortSignal.any([
-            this.sessionLifetime.signal, AbortSignal.timeout(this.config.targetTimeoutMs), ...(ctx.signal ? [ctx.signal] : []),
-          ]) })
-        : null,
+      outcome: await this.provider.recall(prompt, scope, {
+        signal: AbortSignal.any(signals),
+      }),
     };
   }
 
