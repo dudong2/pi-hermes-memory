@@ -75,6 +75,8 @@ const DEFAULT_CONFIG: MemoryConfig = {
   // Removal still requires complete explicit policy; pausing keeps observation active.
   curatorEnabled: true,
   curatorPaused: false,
+  projectResolutionMode: "cwd",
+  hindsightEnabled: false,
   sessionRetentionDays: DEFAULT_SESSION_RETENTION_DAYS,
 };
 
@@ -186,6 +188,19 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       }
       if (Object.prototype.hasOwnProperty.call(parsed, "curatorPaused")) {
         config.curatorPaused = typeof parsed.curatorPaused === "boolean" ? parsed.curatorPaused : true;
+      }
+      if (Object.prototype.hasOwnProperty.call(parsed, "projectResolutionMode")) {
+        config.projectResolutionMode = ["cwd", "catalog", "disabled"].includes(parsed.projectResolutionMode)
+          ? parsed.projectResolutionMode : "disabled";
+      }
+      if (Object.prototype.hasOwnProperty.call(parsed, "hindsightEnabled")) {
+        config.hindsightEnabled = parsed.hindsightEnabled === true;
+      }
+      if (typeof parsed.hindsightSettingsPath === "string") {
+        config.hindsightSettingsPath = normalizeConfiguredMemoryDir(parsed.hindsightSettingsPath);
+      }
+      if (typeof parsed.scopeCatalogDir === "string") {
+        config.scopeCatalogDir = normalizeConfiguredMemoryDir(parsed.scopeCatalogDir);
       }
       if (Object.prototype.hasOwnProperty.call(parsed, "curatorPolicy")) {
         config.curatorPolicy = normalizeCuratorPolicy(parsed.curatorPolicy);

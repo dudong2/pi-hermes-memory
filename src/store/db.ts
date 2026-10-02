@@ -164,6 +164,8 @@ export class DatabaseManager {
   private readonly recoveryOptions: ResolvedDatabaseRecoveryOptions;
   private lastRecovery: DatabaseRecoveryResult | null = null;
   private openGuard: (() => void) | null = null;
+  private sessionProjectResolver: ((cwd: string) => string | null) | null = null;
+  private projectMemoryKeys: ReadonlySet<string> | undefined;
   private pendingOpenIntegrityScan: Promise<void> | null = null;
   private quickCheckOnOpen = true;
   private activeRecoveryLease: { coordinator: AtomicLockCoordinator; key: string; token: string } | null = null;
@@ -179,6 +181,17 @@ export class DatabaseManager {
     }
     return this.canonicalDbPath;
   }
+
+  setSessionProjectResolver(resolver: ((cwd: string) => string | null) | null): void {
+    this.sessionProjectResolver = resolver;
+  }
+
+  resolveSessionProject(cwd: string, fallback: string): string {
+    return this.sessionProjectResolver ? this.sessionProjectResolver(cwd) ?? '' : fallback;
+  }
+
+  setProjectMemoryKeys(keys: ReadonlySet<string> | undefined): void { this.projectMemoryKeys = keys; }
+  getProjectMemoryKeys(): ReadonlySet<string> | undefined { return this.projectMemoryKeys; }
 
   setOpenGuard(guard: (() => void) | null): void {
     this.openGuard = guard;

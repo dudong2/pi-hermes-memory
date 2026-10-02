@@ -8,6 +8,7 @@ import type { InventoryRoot } from "./model.js";
 import { normalizeCuratorPolicy, type CuratorPolicyConfig } from "./policy.js";
 import { removeUnusedSkills, type RemovalResult } from "./removal.js";
 import { CuratorStore } from "./store.js";
+import { ProjectScopeBinding } from "../scope/project-binding.js";
 
 interface RunnerConfig {
   enabled: boolean;
@@ -15,6 +16,9 @@ interface RunnerConfig {
   policy: CuratorPolicyConfig;
   globalRoot: string;
   projectsRoot: string;
+  resolutionMode: "cwd" | "catalog";
+  scopeCatalogDir?: string;
+  scopeKeys?: ReadonlySet<string>;
 }
 
 function directorySegment(value: string): boolean {
@@ -47,8 +51,20 @@ export function readRunnerConfig(agentRoot: string): RunnerConfig | null {
     projectsDir = expandHome(projectsDir.trim());
     if (path.isAbsolute(projectsDir)) projectsDir = path.relative(agentRoot, projectsDir);
     if (!directorySegment(projectsDir)) return null;
+    const resolutionMode = raw.projectResolutionMode ?? "cwd";
+    if (resolutionMode !== "cwd" && resolutionMode !== "catalog") return null;
+    let scopeCatalogDir: string | undefined;
+    let scopeKeys: ReadonlySet<string> | undefined;
+    if (resolutionMode === "catalog") {
+      if (typeof raw.scopeCatalogDir !== "string" || !raw.scopeCatalogDir.trim()) return null;
+      scopeCatalogDir = path.resolve(agentRoot, expandHome(raw.scopeCatalogDir.trim()));
+      const binding = new ProjectScopeBinding({ projectResolutionMode: "catalog", scopeCatalogDir });
+      if (!binding.available) return null;
+      scopeKeys = binding.keys();
+    }
     return { enabled: raw.curatorEnabled !== false, paused: raw.curatorPaused === true, policy,
-      globalRoot: path.join(memoryRoot, "skills"), projectsRoot: path.join(agentRoot, projectsDir) };
+      globalRoot: path.join(memoryRoot, "skills"), projectsRoot: path.join(agentRoot, projectsDir),
+      resolutionMode, scopeCatalogDir, scopeKeys };
   } catch { return null; }
 }
 
@@ -57,7 +73,8 @@ function configuredRoots(config: RunnerConfig, curator: CuratorStore): Inventory
   const names = new Set<string>();
   for (const record of curator.list()) {
     const parsed = parseSkillId(record.skillId);
-    if (parsed?.scope !== "project" || !parsed.projectName || !directorySegment(parsed.projectName)) continue;
+    if (parsed?.scope !== "project" || !parsed.projectName || !directorySegment(parsed.projectName)
+      || (config.scopeKeys && !config.scopeKeys.has(parsed.projectName))) continue;
     names.add(parsed.projectName);
   }
   for (const projectName of names) roots.push({ scope: "project", projectName,
@@ -74,7 +91,9 @@ export async function runCuratorCycle(options: { agentRoot: string; signal?: Abo
   const currentPolicy = () => {
     const current = readRunnerConfig(root);
     if (!current?.enabled || current.paused || options.signal?.aborted
-      || current.globalRoot !== config.globalRoot || current.projectsRoot !== config.projectsRoot) return null;
+      || current.globalRoot !== config.globalRoot || current.projectsRoot !== config.projectsRoot
+      || current.resolutionMode !== config.resolutionMode || current.scopeCatalogDir !== config.scopeCatalogDir
+      || JSON.stringify([...(current.scopeKeys ?? [])].sort()) !== JSON.stringify([...(config.scopeKeys ?? [])].sort())) return null;
     return current.policy;
   };
   try {

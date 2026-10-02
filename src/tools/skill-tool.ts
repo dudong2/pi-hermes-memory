@@ -89,7 +89,8 @@ const SKILL_TOOL_PARAMETERS = Type.Object({
 
 export const SKILL_MANAGE_TOOL_NAME = "skill_manage";
 
-export function registerSkillTool(pi: ExtensionAPI, store: SkillStore): void {
+export function registerSkillTool(pi: ExtensionAPI, store: SkillStore,
+  bindProject?: (cwd?: string) => Promise<void>): void {
   pi.registerTool({
     name: SKILL_MANAGE_TOOL_NAME,
     label: "Skill Manager",
@@ -108,6 +109,7 @@ export function registerSkillTool(pi: ExtensionAPI, store: SkillStore): void {
     renderResult: createSharedToolResultRenderer(skillResultView),
     parameters: SKILL_TOOL_PARAMETERS,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
+      await bindProject?.(ctx?.cwd);
       const skillParams = params as {
         action: "create" | "view" | "patch" | "update" | "edit" | "delete";
         name?: string;

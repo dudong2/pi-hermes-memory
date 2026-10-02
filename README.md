@@ -449,6 +449,10 @@ This means skills build up naturally over time without you having to ask.
 Curator는 확인된 관리 대상의 조건부 제거 엔진을 제공합니다. 스킬별 승인·삭제 이력·알림·보관·복원은 없으며, 조건·세대·활성 캐시를 직전에 다시 확인합니다. `node scripts/curator.mjs --watch --interval-minutes <간격>`으로 Pi 밖에서 주기 실행할 수 있습니다. 예약 작업·데몬은 자동 설치하지 않습니다.
 `curatorEnabled: false`로 전체 기능을, `curatorPaused: true`로 제거만 중지할 수 있습니다. 저장 방식과 제한은 [Curator 문서](docs/curator/README.md)를 참고하세요.
 
+### Scope·Hindsight 통합 (3단계)
+
+`pi-memory-orchestrator`의 Scope 식별과 저장 경로 바인딩을 Pi 전용으로 흡수했습니다. 명시적인 catalog 모드에서 메모리·스킬·검색·Curator가 같은 Scope ID를 사용하며 이름 기반 fallback을 하지 않습니다. Hindsight 검색·저장·outbox·관리 기능도 이식했으며 `hindsightEnabled`는 기본 비활성화입니다. 검증 후 기존 확장을 비활성화하는 운영 전환은 다음 단계입니다. 현재 설치본·설정·기존 데이터는 자동 변경하지 않습니다. [통합 범위와 상태](docs/scope-integration/README.md)를 참고하세요.
+
 ### Commands
 
 | Command | What it does |

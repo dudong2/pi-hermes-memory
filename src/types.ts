@@ -111,6 +111,14 @@ export interface MemoryConfig {
   curatorPaused?: boolean;
   /** Explicit policy durations; undefined/unset or null/invalid never authorizes removal. */
   curatorPolicy?: CuratorPolicyConfig | null;
+  /** Keep cwd identity by default; catalog mode uses stable Scope IDs without cwd fallback. */
+  projectResolutionMode?: "cwd" | "catalog" | "disabled";
+  /** Existing Scope catalog directory, explicitly configured for catalog mode. */
+  scopeCatalogDir?: string;
+  /** Optional integrated Hindsight owner. Off until explicit operational cutover. */
+  hindsightEnabled?: boolean;
+  /** Existing Orchestrator settings file; auth material stays in its approved original file. */
+  hindsightSettingsPath?: string;
 }
 
 export type MemoryCategory =

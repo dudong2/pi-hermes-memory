@@ -189,7 +189,12 @@ export async function syncMarkdownMemoriesToSqlite(
   await reconcileFile(globalUserFile, 'user');
   await reconcileFile(globalFailureFile, 'failure');
 
-  const projects = scanProjectDirs(agentRoot, globalDir, projectsMemoryDir);
+  const allowedKeys = dbManager.getProjectMemoryKeys?.();
+  const projectsRoot = path.resolve(agentRoot, projectsMemoryDir ?? 'projects-memory');
+  const projects = allowedKeys
+    ? [...allowedKeys].map((name) => ({ name, memoryFile: path.join(projectsRoot, name, MEMORY_FILE) }))
+      .filter(({ memoryFile }) => fs.existsSync(memoryFile))
+    : scanProjectDirs(agentRoot, globalDir, projectsMemoryDir);
   const projectFiles = new Map(projects.map((project) => [project.name, project.memoryFile]));
   const mirroredProjects = dbManager.getDb().prepare(`
     SELECT DISTINCT project
@@ -200,14 +205,15 @@ export async function syncMarkdownMemoriesToSqlite(
     ...projectFiles.keys(),
     ...mirroredProjects.map(({ project }) => project),
   ]);
-  const projectsRoot = path.resolve(agentRoot, projectsMemoryDir ?? 'projects-memory');
   for (const projectName of projectNames) {
+    if (allowedKeys && !allowedKeys.has(projectName)) continue;
     const memoryFile = projectFiles.get(projectName)
       ?? resolveAuthoritativeMemoryFile(projectsRoot, projectName);
+    if (allowedKeys && (!memoryFile || !fs.existsSync(memoryFile))) continue;
     await reconcileFile(memoryFile, 'memory', projectName);
   }
 
-  return { ...counters, projectCount: projectNames.size };
+  return { ...counters, projectCount: [...projectNames].filter((name) => !allowedKeys || allowedKeys.has(name)).length };
 }
 
 export async function migrateThenSyncMarkdownMemories(

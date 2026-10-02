@@ -58,9 +58,13 @@ import { STANDING_FILE } from "./constants.js";
 import { loadConfig } from "./config.js";
 import { shouldWarnAutoConsolidationFailure } from "./auto-consolidation-warning.js";
 import { detectProject, detectProjectSkills } from "./project.js";
+import { ProjectScopeBinding } from "./scope/project-binding.js";
+import { rebindIndexedSessions } from "./scope/session-binding.js";
 import { buildPromptContext } from "./prompt-context.js";
 import { migrateLegacyProjectMemoryDirs } from "./project-memory-migration.js";
-import { AGENT_ROOT } from "./paths.js";
+import { AGENT_ROOT, resolveProjectsRoot } from "./paths.js";
+import { registerHindsightIntegration } from "./hindsight/integration.js";
+import { syncScopeStoreMetadata } from "./hindsight/store-metadata.js";
 import { isDatabaseMigrationPending } from "./extension-root-migration.js";
 import { measureLifecycle, measureLifecycleSync } from "./lifecycle-timing.js";
 import { createMemoryInitializer, withMemoryInitialization, type EnsureMemoryReady } from "./memory-initialization.js";
@@ -69,8 +73,18 @@ export function resolveProjectSkillDiscovery(
   skillStore: SkillStore,
   projectsMemoryDir: string | undefined,
   cwd?: string,
+  projectResolver?: (cwd?: string) => ReturnType<typeof detectProject>,
 ): { skillPaths: string[] } {
-  const detected = detectProjectSkills(projectsMemoryDir, cwd);
+  let detected: ReturnType<typeof detectProjectSkills>;
+  if (projectResolver) {
+    const project = projectResolver(cwd);
+    detected = {
+      ...project,
+      skillsDir: project.memoryDir ? path.join(project.memoryDir, "skills") : null,
+    };
+  } else {
+    detected = detectProjectSkills(projectsMemoryDir, cwd);
+  }
   skillStore.setProjectContext(detected.name, detected.skillsDir);
 
   // Pi auto-discovers its own `~/.pi/agent/skills/`, but this extension keeps
@@ -87,9 +101,10 @@ export function registerProjectSkillDiscoveryHandler(
   skillStore: SkillStore,
   projectsMemoryDir: string | undefined,
   cacheState?: CuratorStore,
+  projectResolver?: (cwd?: string) => ReturnType<typeof detectProject>,
 ): void {
   pi.on("resources_discover", async (event, _ctx) => {
-    const resource = resolveProjectSkillDiscovery(skillStore, projectsMemoryDir, (event as { cwd?: string }).cwd);
+    const resource = resolveProjectSkillDiscovery(skillStore, projectsMemoryDir, (event as { cwd?: string }).cwd, projectResolver);
     if (!cacheState || !cacheState.list().some((record) => record.state === "active")) return resource;
     return cacheState.withMutation(resource.skillPaths, async () => {
       cacheState.registerCacheOwner();
@@ -100,6 +115,12 @@ export function registerProjectSkillDiscoveryHandler(
 
 export default function (pi: ExtensionAPI) {
   const config = loadConfig();
+  const scopeBinding = new ProjectScopeBinding(config);
+  const resolveProject = (cwd?: string) => {
+    scopeBinding.refresh();
+    dbManager.setProjectMemoryKeys(scopeBinding.scoped ? scopeBinding.keys() : undefined);
+    return scopeBinding.resolve(cwd);
+  };
   const lazy = config.lazyInitialization === true && config.memoryMode === "policy-only";
   let sessionContext: ExtensionContext | undefined;
 
@@ -124,6 +145,7 @@ export default function (pi: ExtensionAPI) {
   // project identity from process.cwd() here — bind from session_start ctx.cwd
   // and from tool execute ctx.cwd.
   let projectName = "";
+  let projectDisplayName = "";
   const cacheState = new CuratorStore({ agentRoot });
   const curator = config.curatorEnabled === false ? null : cacheState;
   if (!curator) pi.on("session_shutdown", async () => { cacheState.close(); });
@@ -138,6 +160,10 @@ export default function (pi: ExtensionAPI) {
     migrationSentinelPath: path.join(globalDir, ".skills-migrated-to-extension-storage"),
   });
   const dbManager = new DatabaseManager(globalDir);
+  if (scopeBinding.scoped) {
+    dbManager.setSessionProjectResolver((cwd) => scopeBinding.sessionProject(cwd));
+    dbManager.setProjectMemoryKeys(scopeBinding.keys());
+  }
   let databaseClosed = false;
   const backfillState: SessionBackfillState = { inProgress: false, promise: null };
   dbManager.setQuickCheckOnOpen(config.quickCheckOnOpen ?? true);
@@ -151,7 +177,7 @@ export default function (pi: ExtensionAPI) {
   const sessionsDir = path.join(agentRoot, "sessions");
 
   const refreshSkillProjectContext = (cwd?: string) => {
-    const resource = resolveProjectSkillDiscovery(skillStore, config.projectsMemoryDir, cwd);
+    const resource = resolveProjectSkillDiscovery(skillStore, config.projectsMemoryDir, cwd, resolveProject);
     return {
       name: skillStore.getProjectName(),
       skillsDir: skillStore.getProjectSkillsDir(),
@@ -162,7 +188,7 @@ export default function (pi: ExtensionAPI) {
   // Keep project memory available for users upgrading from the old
   // ~/.pi/agent/<project>/ layout. This is non-destructive: legacy folders
   // remain in place while entries are copied/merged into projects-memory/.
-  if (!lazy) migrateLegacyProjectMemoryDirs(agentRoot, config.projectsMemoryDir);
+  if (!lazy && !scopeBinding.scoped) migrateLegacyProjectMemoryDirs(agentRoot, config.projectsMemoryDir);
   // Project-scoped store: ~/.pi/agent/<projectsMemoryDir>/<project_name>/
   // Bound from session/tool ctx.cwd, never from factory process.cwd().
   const createProjectStore = (projectInfo: ReturnType<typeof detectProject>): MemoryStore | null => {
@@ -178,11 +204,12 @@ export default function (pi: ExtensionAPI) {
   let projectLoad: Promise<void> | undefined;
   const projectStoreRef = () => projectStore;
   const projectNameRef = () => projectName;
+  const projectDisplayNameRef = () => projectDisplayName;
   let configureProjectStore: (candidate: MemoryStore | null) => void = () => {};
   let configureMemoryToolProjectStore: (candidate: MemoryStore | null) => void = () => {};
   const bindProjectFromCwd = async (cwd?: string): Promise<void> => {
     if (!cwd) return;
-    const nextProject = detectProject(config.projectsMemoryDir, cwd);
+    const nextProject = resolveProject(cwd);
     const nextProjectMemoryDir = nextProject.memoryDir ?? null;
     if (nextProjectMemoryDir !== projectMemoryDir) {
       projectMemoryDir = nextProjectMemoryDir;
@@ -193,12 +220,16 @@ export default function (pi: ExtensionAPI) {
         projectMemoryDir = null;
         projectStore = null;
         projectName = "";
+        projectDisplayName = "";
+        configureProjectStore(null);
+        configureMemoryToolProjectStore(null);
         projectLoad = undefined;
         throw error;
       });
     }
     await projectLoad;
     projectName = nextProject.name ?? "";
+    projectDisplayName = nextProject.displayName ?? projectName;
   };
   // Never written by review, consolidation or the correction detector — see
   // store/standing-instructions.ts for why provenance has to be structural.
@@ -209,7 +240,7 @@ export default function (pi: ExtensionAPI) {
 
   const initialization = createMemoryInitializer(async () => {
     const timingPrefix = lazy ? "memory-init" : "session-start";
-    if (lazy) migrateLegacyProjectMemoryDirs(agentRoot, config.projectsMemoryDir);
+    if (lazy && !scopeBinding.scoped) migrateLegacyProjectMemoryDirs(agentRoot, config.projectsMemoryDir);
     if (!persistenceInitialized) {
       try {
         await measureLifecycle(`${timingPrefix}.persistence-sync`, async () => {
@@ -226,6 +257,7 @@ export default function (pi: ExtensionAPI) {
             },
           );
         });
+        if (scopeBinding.scoped && scopeBinding.available) rebindIndexedSessions(dbManager);
         persistenceInitialized = true;
       } catch (error) {
         if (lazy) throw error;
@@ -293,6 +325,14 @@ export default function (pi: ExtensionAPI) {
   const ensureMemoryReady: EnsureMemoryReady = (ctx, signal) => initialization.ensure(ctx, signal);
   const memoryPi = withMemoryInitialization(pi, initialization);
 
+  // When explicitly enabled, resolve/onboard Scope before the working-memory
+  // startup snapshot. The default remains inactive while the old owner runs.
+  registerHindsightIntegration(pi, config, async (scope) => {
+    await syncScopeStoreMetadata(scope, resolveProjectsRoot(config.projectsMemoryDir));
+    scopeBinding.refresh();
+    if (initialization.isReady()) await bindProjectFromCwd(scope.workspaceRoot);
+  });
+
   // Skills and pinned instructions must be available even without a lookup.
   pi.on("session_start", async (_event, ctx) => {
     sessionContext = ctx;
@@ -306,11 +346,11 @@ export default function (pi: ExtensionAPI) {
 
   // Preserve the core startup handler ordering and bind skill roots before observation.
   if (curator) registerCuratorObserver(pi, curator, skillStore);
-  registerProjectSkillDiscoveryHandler(pi, skillStore, config.projectsMemoryDir, cacheState);
+  registerProjectSkillDiscoveryHandler(pi, skillStore, config.projectsMemoryDir, cacheState, resolveProject);
 
   // ── 2. Inject memory policy by default; legacy mode keeps full frozen memory blocks ──
   pi.on("before_agent_start", async (event, _ctx) => {
-    const promptContext = await buildPromptContext(config, store, projectStoreRef(), projectNameRef(), standingStore);
+    const promptContext = await buildPromptContext(config, store, projectStoreRef(), projectDisplayNameRef(), standingStore);
 
     if (promptContext) {
       return {
@@ -323,7 +363,7 @@ export default function (pi: ExtensionAPI) {
   configureMemoryToolProjectStore = registerMemoryTool(memoryPi, store, projectStoreRef, dbManager, projectNameRef, bindProjectFromCwd);
 
   // ── 4. Register the skill tool ──
-  registerSkillTool(pi, skillStore);
+  registerSkillTool(pi, skillStore, async (cwd) => { refreshSkillProjectContext(cwd); });
 
   // ── 5. Setup background learning loop (with tool-call-aware nudge) ──
   setupBackgroundReview(pi, store, projectStoreRef, config, {
@@ -380,12 +420,12 @@ export default function (pi: ExtensionAPI) {
   registerCuratorCommand(pi, curator, skillStore, config.projectsMemoryDir, config.curatorPolicy, () => {
     const current = loadConfig();
     return current.curatorEnabled === false || current.curatorPaused === true ? null : current.curatorPolicy;
-  });
+  }, resolveProject);
   registerInterviewCommand(memoryPi, store);
   registerSwitchProjectCommand(pi, config);
   registerLearnMemoryCommand(pi);
   registerSyncMarkdownMemoriesCommand(memoryPi, dbManager, globalDir, config.projectsMemoryDir, agentRoot);
-  registerPreviewContextCommand(lazy ? pi : memoryPi, store, projectStoreRef, projectNameRef, config, standingStore);
+  registerPreviewContextCommand(lazy ? pi : memoryPi, store, projectStoreRef, projectDisplayNameRef, config, standingStore);
   if (standingStore) registerStandingPinCommand(pi, standingStore);
 
   // ── 10. Live session indexing ──
@@ -399,8 +439,10 @@ export default function (pi: ExtensionAPI) {
 
   // ── 11. SQLite session search + extended memory ──
   registerSessionSearchTool(config.sessionSearch?.variant === "anchors" ? pi : memoryPi,
-    dbManager, config.sessionSearch ?? { variant: "legacy" });
-  registerMemorySearchTool(memoryPi, dbManager);
+    dbManager, config.sessionSearch ?? { variant: "legacy" },
+    { projectSelector: scopeBinding.scoped ? (value) => { scopeBinding.refresh(); return scopeBinding.selector(value); } : undefined });
+  registerMemorySearchTool(memoryPi, dbManager,
+    scopeBinding.scoped ? (value) => { scopeBinding.refresh(); return scopeBinding.selector(value); } : undefined);
   registerIndexSessionsCommand(memoryPi, config);
 
   // ── 12. Auto-index session on shutdown ──

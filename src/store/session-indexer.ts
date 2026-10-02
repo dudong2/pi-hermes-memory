@@ -85,6 +85,7 @@ export function indexSession(dbManager: DatabaseManager, session: ParsedSession)
 function indexSessionOnce(dbManager: DatabaseManager, session: ParsedSession): IndexResult {
   const db = dbManager.getDb();
 
+  const project = dbManager.resolveSessionProject?.(session.cwd, session.project) ?? session.project;
   const existingSession = db.prepare('SELECT id FROM sessions WHERE id = ?').get(session.id) as { id: string } | undefined;
   const before = db.prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ?').get(session.id) as { count: number };
 
@@ -110,7 +111,7 @@ function indexSessionOnce(dbManager: DatabaseManager, session: ParsedSession): I
   const writeSession = () => {
     insertSession.run(
       session.id,
-      session.project,
+      project,
       session.cwd,
       session.startedAt,
       session.endedAt,
@@ -128,7 +129,7 @@ function indexSessionOnce(dbManager: DatabaseManager, session: ParsedSession): I
       );
     }
 
-    updateSession.run(session.project, session.cwd, session.endedAt, session.id, session.id);
+    updateSession.run(project, session.cwd, session.endedAt, session.id, session.id);
   };
 
   if (db.transaction) {

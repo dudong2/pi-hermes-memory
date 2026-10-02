@@ -111,7 +111,8 @@ export function parseSkillId(skillId: string): { scope: SkillScope; projectName?
 
   if (skillId.startsWith("project:")) {
     const rest = skillId.slice("project:".length);
-    const idx = rest.indexOf(":");
+    // Project keys can contain the inherited path: namespace; skill slugs cannot.
+    const idx = rest.lastIndexOf(":");
     if (idx <= 0 || idx === rest.length - 1) return null;
     return {
       scope: "project",
