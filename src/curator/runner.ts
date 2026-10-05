@@ -82,15 +82,17 @@ function configuredRoots(config: RunnerConfig, curator: CuratorStore): Inventory
   return roots;
 }
 
-export async function runCuratorCycle(options: { agentRoot: string; signal?: AbortSignal; now?: Date }): Promise<RemovalResult> {
-  const empty = { removed: 0, held: 0, failed: 0 };
+export async function runCuratorCycle(options: { agentRoot: string; signal?: AbortSignal; now?: Date; mode?: "startup" }): Promise<RemovalResult> {
+  const startup = options.mode === "startup";
+  const empty: RemovalResult = { removed: 0, held: 0, failed: 0 };
+  if (startup) empty.eligible = 0;
   const root = path.resolve(options.agentRoot);
   const config = readRunnerConfig(root);
-  if (!config || !config.enabled || config.paused || options.signal?.aborted) return empty;
+  if (!config || !config.enabled || (!startup && config.paused) || options.signal?.aborted) return empty;
   const curator = new CuratorStore({ agentRoot: root });
   const currentPolicy = () => {
     const current = readRunnerConfig(root);
-    if (!current?.enabled || current.paused || options.signal?.aborted
+    if (!current?.enabled || (!config.paused && current.paused) || options.signal?.aborted
       || current.globalRoot !== config.globalRoot || current.projectsRoot !== config.projectsRoot
       || current.resolutionMode !== config.resolutionMode || current.scopeCatalogDir !== config.scopeCatalogDir
       || JSON.stringify([...(current.scopeKeys ?? [])].sort((a, b) => a.localeCompare(b))) !== JSON.stringify([...(config.scopeKeys ?? [])].sort((a, b) => a.localeCompare(b)))) return null;
@@ -102,7 +104,8 @@ export async function runCuratorCycle(options: { agentRoot: string; signal?: Abo
     await curator.withMutation(roots.map((entry) => entry.path), async () => {
       if (currentPolicy()) curator.reconcileExitedProcesses();
     });
-    return await removeUnusedSkills({ curator, roots, policy: currentPolicy, now: options.now });
+    return await removeUnusedSkills({ curator, roots, policy: currentPolicy, now: options.now,
+      basis: startup ? "calendar" : "continuous", allowCachedSessions: startup, dryRunOnly: startup && config.paused });
   } catch { return { ...empty, failed: 1 }; }
   finally { curator.close(); }
 }

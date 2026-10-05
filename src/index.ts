@@ -38,6 +38,7 @@ import { registerSkillTool } from "./tools/skill-tool.js";
 import { CuratorStore } from "./curator/store.js";
 import { registerCuratorCommand } from "./curator/command.js";
 import { registerCuratorObserver } from "./curator/observer-hooks.js";
+import { registerCuratorStartup } from "./curator/startup.js";
 import { registerSessionSearchTool } from "./tools/session-search-tool.js";
 import { registerMemorySearchTool } from "./tools/memory-search-tool.js";
 import { setupBackgroundReview } from "./handlers/background-review.js";
@@ -344,8 +345,11 @@ export default function (pi: ExtensionAPI) {
     await skillStore.ensureDiscoveredRoots();
   });
 
-  // Preserve the core startup handler ordering and bind skill roots before observation.
-  if (curator) registerCuratorObserver(pi, curator, skillStore);
+  // After root migration/binding but before observation and Pi resource discovery.
+  if (curator) {
+    registerCuratorStartup(pi, agentRoot);
+    registerCuratorObserver(pi, curator, skillStore);
+  }
   registerProjectSkillDiscoveryHandler(pi, skillStore, config.projectsMemoryDir, cacheState, resolveProject);
 
   // ── 2. Inject memory policy by default; legacy mode keeps full frozen memory blocks ──

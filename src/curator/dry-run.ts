@@ -10,6 +10,8 @@ export async function dryRunCurator(options: {
   curator: CuratorStore;
   policy?: unknown;
   now?: Date;
+  basis?: "continuous" | "calendar";
+  allowCachedSessions?: boolean;
 }): Promise<PolicyReport & { warnings: string[] }> {
   const inventory = await inventorySkills({ roots: options.roots, curator: options.curator });
   const warnings = [...inventory.warnings];
@@ -38,6 +40,7 @@ export async function dryRunCurator(options: {
   });
   return {
     ...evaluateCuratorPolicy({ skills, observation, policy: options.policy, now: options.now ?? new Date(),
+      basis: options.basis, allowCachedSessions: options.allowCachedSessions,
       inventoryIncomplete: warnings.some((warning) => warning !== "observation-gap")
         || (inventory.partial && inventory.warnings.length === 0) }),
     warnings: [...new Set(warnings)],

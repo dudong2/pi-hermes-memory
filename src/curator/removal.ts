@@ -14,8 +14,11 @@ export interface RemovalOptions {
   roots: InventoryRoot[];
   policy?: unknown | (() => unknown);
   now?: Date;
+  basis?: "continuous" | "calendar";
+  allowCachedSessions?: boolean;
+  dryRunOnly?: boolean;
 }
-export interface RemovalResult { removed: number; held: number; failed: number; }
+export interface RemovalResult { removed: number; held: number; failed: number; eligible?: number; }
 interface Target { directory: string; filePath: string; directoryIdentity: string; }
 function policy(options: RemovalOptions): CuratorPolicyConfig | null | undefined {
   const raw = typeof options.policy === "function" ? options.policy() : options.policy;
@@ -56,11 +59,14 @@ async function inspectTarget(options: RemovalOptions, root: InventoryRoot, recor
 async function removeLocked(options: RemovalOptions, root: InventoryRoot, generationId: string): Promise<boolean> {
   const fresh = await dryRunCurator({ ...options, policy: policy(options) });
   if (!fresh.decisions.some((row) => row.generationId === generationId && row.candidate)
-    || options.curator.hasCachedSessions()) return false;
+    || (!options.allowCachedSessions && options.curator.hasCachedSessions())) return false;
   const record = options.curator.list().find((row) => row.generationId === generationId && row.state === "active");
   if (!record) return false;
   const target = await inspectTarget(options, root, record);
   if (!target) return false;
+  // The paused path checks the same policy, generation and file snapshot under
+  // the same lock, but does not revoke authority or touch the skill file.
+  if (options.dryRunOnly) return true;
   // Revoke authority first. A crash cannot leave a stale deletion intent that
   // later targets a newly created same-name skill. No journal or tombstone remains.
   if (!options.curator.forgetGeneration(record)) return false;
@@ -86,13 +92,16 @@ async function removeGeneration(options: RemovalOptions, generationId: string): 
 // or per-skill notification. Scheduling is separate from this bounded engine.
 export async function removeUnusedSkills(options: RemovalOptions): Promise<RemovalResult> {
   const result: RemovalResult = { removed: 0, held: 0, failed: 0 };
+  if (options.dryRunOnly) result.eligible = 0;
   try {
     const plan = await dryRunCurator({ ...options, policy: policy(options) });
     for (const decision of plan.decisions) {
       if (!decision.candidate || !decision.generationId) { result.held++; continue; }
       try {
-        if (await removeGeneration(options, decision.generationId)) result.removed++;
-        else result.held++;
+        if (await removeGeneration(options, decision.generationId)) {
+          if (options.dryRunOnly) result.eligible = (result.eligible ?? 0) + 1;
+          else result.removed++;
+        } else result.held++;
       } catch { result.failed++; }
     }
   } catch { result.failed++; }

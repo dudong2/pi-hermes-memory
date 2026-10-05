@@ -129,6 +129,25 @@ describe("Curator deterministic dry-run policy", () => {
     assert.equal(evaluateCuratorPolicy({ skills: [SKILL], observation: observation(), policy: CONFIG, now: new Date(NaN) }).candidateCount, 0);
   });
 
+  it("counts offline calendar time for startup without promoting uncertain generations", () => {
+    const calendar = (skill: Partial<PolicySkill>, obs: ObservationSummary) => evaluateCuratorPolicy({
+      skills: [{ ...SKILL, ...skill }], observation: obs, policy: CONFIG, now: NOW,
+      basis: "calendar", allowCachedSessions: true,
+    });
+    const open = observation([run(40, 0, "open")]);
+    assert.equal(calendar({}, open).candidateCount, 1);
+    assert.ok(calendar({}, open).limitations.includes("unobserved-time-counted"));
+    assert.equal(calendar({ lastActivityAt: ago(9) }, open).candidateCount, 0);
+    assert.equal(calendar({ createdAt: ago(13), modifiedAt: ago(13), lastActivityAt: null }, open).candidateCount, 0);
+    assert.equal(calendar({ lastActivityAt: null }, observation([])).candidateCount, 1);
+    const gap = observation([]);
+    gap.gaps.push({ runId: "old", generationId: SKILL.generationId, at: ago(3), reason: "observer-error" });
+    assert.equal(calendar({}, gap).candidateCount, 0);
+    gap.gaps[0].at = ago(20);
+    assert.equal(calendar({}, gap).candidateCount, 1);
+    assert.equal(calendar({ source: "unknown", generationVerified: false }, observation([])).candidateCount, 0);
+  });
+
   it("does not mutate policy inputs", () => {
     const input = { skills: [SKILL], observation: observation(), policy: CONFIG, now: NOW };
     const before = JSON.stringify(input);

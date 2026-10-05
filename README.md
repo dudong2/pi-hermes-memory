@@ -444,10 +444,10 @@ After a complex task (8+ tool calls using 2+ different tools in a single turn), 
 
 This means skills build up naturally over time without you having to ask.
 
-### Skill Curator (단계 E: 독립 주기 실행)
+### Skill Curator (Pi 시작 검사)
 
-Curator는 확인된 관리 대상의 조건부 제거 엔진을 제공합니다. 스킬별 승인·삭제 이력·알림·보관·복원은 없으며, 조건·세대·활성 캐시를 직전에 다시 확인합니다. `node scripts/curator.mjs --watch --interval-minutes <간격>`으로 Pi 밖에서 주기 실행할 수 있습니다. 예약 작업·데몬은 자동 설치하지 않습니다.
-`curatorEnabled: false`로 전체 기능을, `curatorPaused: true`로 제거만 중지할 수 있습니다. 저장 방식과 제한은 [Curator 문서](docs/curator/README.md)를 참고하세요.
+Curator는 새 Pi 프로세스가 스킬을 발견하기 전에 확인된 관리 대상의 조건부 제거를 검사합니다. 스킬별 승인·삭제 이력·알림·보관·복원은 없으며, 조건·세대·파일 상태를 삭제 직전에 다시 확인합니다. 별도의 주기 실행 CLI도 제공하지만 예약 작업·데몬은 자동 설치하지 않습니다.
+`curatorEnabled: false`로 전체 기능을, `curatorPaused: true`로 시작 시 동일한 사전 검증만 하고 실제 제거를 중지할 수 있습니다. 시작 검사는 Pi 미실행 시간을 포함한 달력 기준을 사용하며, 열린 Pi의 낡은 스킬 목록은 자동으로 새로고침되지 않습니다. 저장 방식과 제한은 [Curator 문서](docs/curator/README.md)를 참고하세요.
 
 ### Scope·Hindsight 통합 (3단계)
 

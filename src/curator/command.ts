@@ -35,14 +35,17 @@ export function registerCuratorCommand(
         const project = projectResolver ? projectResolver(ctx.cwd) : detectProjectSkills(projectsMemoryDir, ctx.cwd);
         if (project.memoryDir && project.name) roots.push({ scope: "project", path: skillsRoot(project.memoryDir), projectName: project.name });
         if (action === "remove") {
-          await removeUnusedSkills({ roots, curator, policy: currentPolicy ?? policy });
+          await removeUnusedSkills({ roots, curator, policy: currentPolicy ?? policy,
+            basis: "calendar", allowCachedSessions: true });
           return;
         }
         if (action === "dry-run") {
-          text = JSON.stringify(await dryRunCurator({ roots, curator, policy }), null, 2);
+          text = JSON.stringify(await dryRunCurator({ roots, curator, policy,
+            basis: "calendar", allowCachedSessions: true }), null, 2);
         } else {
           const report = await inventorySkills({ roots, curator });
-          text = JSON.stringify({ stage: "E", automaticArchiving: false, automaticScheduling: false, periodicRunner: "external-cli", ...report }, null, 2);
+          text = JSON.stringify({ stage: "E", automaticArchiving: false, automaticScheduling: false,
+            maintenanceTrigger: "process-start", ...report }, null, 2);
         }
       }
       if (ctx.hasUI) ctx.ui.notify(text, "info");

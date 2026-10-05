@@ -26,7 +26,7 @@ export interface PolicySkill {
 export type PolicyReason = "policy-not-configured" | "invalid-policy" | "invalid-time" | "unknown-provenance"
   | "unverified-generation" | "pinned" | "in-use" | "observation-missing" | "observation-fault"
   | "unsupported-observer" | "observation-open" | "stale-observation" | "insufficient-observation"
-  | "creation-grace" | "modification-grace" | "adoption-grace" | "recent-activity" | "inventory-incomplete";
+  | "creation-grace" | "modification-grace" | "adoption-grace" | "recent-activity" | "insufficient-age" | "inventory-incomplete";
 export interface PolicyDecision {
   skillId: string;
   generationId: string | null;
@@ -40,7 +40,7 @@ export interface PolicyReport {
   dryRun: true;
   automaticArchiving: false;
   evaluatedAt: string | null;
-  evidenceScope: "continuous-closed-supported-paths";
+  evidenceScope: "continuous-closed-supported-paths" | "calendar-elapsed-known-activity";
   policy: CuratorPolicyConfig | null;
   policyStatus: "configured" | "not-configured" | "invalid";
   decisions: PolicyDecision[];
@@ -132,8 +132,11 @@ export function evaluateCuratorPolicy(options: {
   policy?: unknown;
   now: Date;
   inventoryIncomplete?: boolean;
+  basis?: "continuous" | "calendar";
+  allowCachedSessions?: boolean;
 }): PolicyReport {
   const now = options.now.getTime();
+  const calendar = options.basis === "calendar";
   const policy = normalizeCuratorPolicy(options.policy);
   const observed = coverage(options.observation, now);
   const decisions = options.skills.map((skill): PolicyDecision => {
@@ -145,8 +148,8 @@ export function evaluateCuratorPolicy(options: {
     if (skill.source !== "creation-boundary") reasons.add("unknown-provenance");
     if (skill.generationVerified !== true || !skill.generationId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(skill.generationId)) reasons.add("unverified-generation");
     if (skill.pinned !== false || policy?.pinnedSkillIds?.includes(skill.skillId)) reasons.add("pinned");
-    if (skill.inUse !== false) reasons.add("in-use");
-    if (observed.open) reasons.add("observation-open");
+    if (!options.allowCachedSessions && skill.inUse !== false) reasons.add("in-use");
+    if (!options.allowCachedSessions && observed.open) reasons.add("observation-open");
     const created = time(skill.createdAt);
     const modified = time(skill.modifiedAt);
     const adopted = skill.adoptedAt == null ? null : time(skill.adoptedAt);
@@ -156,16 +159,23 @@ export function evaluateCuratorPolicy(options: {
       || (skill.lastActivityAt !== null && (activity === null || activity < created))
       || [created, modified, adopted, activity].some((value) => value !== null && value > now)) reasons.add("invalid-time");
     const window = observed.window;
-    if (!window) reasons.add("observation-missing");
+    if (!window && !calendar) reasons.add("observation-missing");
     if (options.observation && !SUPPORTED_ACTIVITY_PATHS.every((route) => options.observation!.supportedPaths.includes(route))) {
       reasons.add("unsupported-observer");
     }
-    if (observed.unsupported.some((interval) => !window || intersects(interval, window))) reasons.add("unsupported-observer");
-    if (observed.faulty.some((interval) => !window || intersects(interval, window))) reasons.add("observation-fault");
+    if (!calendar && observed.unsupported.some((interval) => !window || intersects(interval, window))) reasons.add("unsupported-observer");
+    if (!calendar && observed.faulty.some((interval) => !window || intersects(interval, window))) reasons.add("observation-fault");
+    let uncertaintyAt = -Infinity;
     for (const gap of options.observation?.gaps ?? []) {
       const at = time(gap.at);
       if (at === null || at > now) reasons.add("invalid-time");
-      else if ((!gap.generationId || gap.generationId === skill.generationId) && (!window || at >= window.start)) reasons.add("observation-fault");
+      else if (!gap.generationId || gap.generationId === skill.generationId) {
+        if (calendar) uncertaintyAt = Math.max(uncertaintyAt, at);
+        else if (!window || at >= window.start) reasons.add("observation-fault");
+      }
+    }
+    if (calendar) {
+      for (const interval of [...observed.faulty, ...observed.unsupported]) uncertaintyAt = Math.max(uncertaintyAt, interval.end);
     }
     if (policy && created !== null && modified !== null) {
       const grace = [
@@ -178,7 +188,15 @@ export function evaluateCuratorPolicy(options: {
         boundaries[label] = eligible === null ? null : iso(eligible);
         if (eligible !== null && (!boundaries[label] || eligible > now)) reasons.add(reason);
       }
-      if (window) {
+      if (calendar) {
+        const start = Math.max(created, adopted ?? created);
+        const inactivityStart = Math.max(start, modified, activity ?? created, uncertaintyAt);
+        boundaries.minimumObservationEligibleAt = iso(start + policy.minimumObservationDays * DAY);
+        boundaries.inactivityEligibleAt = iso(inactivityStart + policy.inactivityDays * DAY);
+        boundaries.calendarInactivityDays = (now - inactivityStart) / DAY;
+        if (now - start < policy.minimumObservationDays * DAY) reasons.add("insufficient-age");
+        if (now - inactivityStart < policy.inactivityDays * DAY) reasons.add("recent-activity");
+      } else if (window) {
         const start = Math.max(window.start, created, adopted ?? created);
         const inactivityStart = Math.max(start, modified, activity ?? created);
         const span = Math.max(0, window.end - start);
@@ -199,11 +217,15 @@ export function evaluateCuratorPolicy(options: {
       cleanupEligible: false, reasons: [...reasons], boundaries };
   });
   const candidateCount = decisions.filter((decision) => decision.candidate).length;
+  let policyStatus: PolicyReport["policyStatus"] = "configured";
+  if (!policy) policyStatus = options.policy === undefined ? "not-configured" : "invalid";
   return {
     stage: "C", dryRun: true, automaticArchiving: false, evaluatedAt: iso(now),
-    evidenceScope: "continuous-closed-supported-paths", policy,
-    policyStatus: policy ? "configured" : options.policy === undefined ? "not-configured" : "invalid", decisions,
+    evidenceScope: calendar ? "calendar-elapsed-known-activity" : "continuous-closed-supported-paths", policy,
+    policyStatus, decisions,
     candidateCount, heldCount: decisions.length - candidateCount,
-    limitations: ["supported-paths-only", "unobserved-time-excluded", "preview-is-not-cleanup-permission", "removal-requires-fresh-generation-and-cache-revalidation"],
+    limitations: calendar
+      ? ["supported-paths-only", "unobserved-time-counted", "preview-is-not-cleanup-permission", "cached-session-may-be-stale", "removal-requires-fresh-generation-revalidation"]
+      : ["supported-paths-only", "unobserved-time-excluded", "preview-is-not-cleanup-permission", "removal-requires-fresh-generation-and-cache-revalidation"],
   };
 }
