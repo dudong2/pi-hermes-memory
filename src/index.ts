@@ -39,6 +39,7 @@ import { CuratorStore } from "./curator/store.js";
 import { registerCuratorCommand } from "./curator/command.js";
 import { registerCuratorObserver } from "./curator/observer-hooks.js";
 import { registerCuratorStartup } from "./curator/startup.js";
+import { readRunnerConfig } from "./curator/runner.js";
 import { registerSessionSearchTool } from "./tools/session-search-tool.js";
 import { registerMemorySearchTool } from "./tools/memory-search-tool.js";
 import { setupBackgroundReview } from "./handlers/background-review.js";
@@ -422,8 +423,8 @@ export default function (pi: ExtensionAPI) {
   registerInsightsCommand(memoryPi, store, projectStoreRef, projectNameRef);
   registerSkillsCommand(pi, skillStore);
   registerCuratorCommand(pi, curator, skillStore, config.projectsMemoryDir, config.curatorPolicy, () => {
-    const current = loadConfig();
-    return current.curatorEnabled === false || current.curatorPaused === true ? null : current.curatorPolicy;
+    const current = readRunnerConfig(agentRoot);
+    return !current?.enabled || current.paused ? null : current.policy;
   }, resolveProject);
   registerInterviewCommand(memoryPi, store);
   registerSwitchProjectCommand(pi, config);

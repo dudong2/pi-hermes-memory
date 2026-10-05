@@ -56,6 +56,10 @@ describe("Curator quiet conditional removal", () => {
     assert.equal(result.failed, 0);
     await assert.rejects(fs.stat(f.skillPath), { code: "ENOENT" });
     await assert.rejects(fs.stat(path.dirname(f.skillPath)), { code: "ENOENT" });
+    const archive = path.join(f.root, "pi-hermes-memory", "curator", "archive", "global", "unused-removal");
+    const entries = await fs.readdir(archive);
+    assert.equal(entries.length, 1);
+    assert.match(await fs.readFile(path.join(archive, entries[0], "SKILL.md"), "utf8"), /Unused removal workflow/);
     assert.deepEqual(f.curator.list(), []);
     assert.deepEqual(f.curator.activities(), []);
     assert.equal(JSON.stringify(result).includes("unused-removal"), false);

@@ -6,6 +6,7 @@ import { dryRunCurator } from "./dry-run.js";
 import { normalizeCuratorPolicy } from "./policy.js";
 import type { CuratorPolicyConfig } from "./policy.js";
 import { pathKey, sameSnapshot, snapshotSkill } from "./files.js";
+import { prepareArchiveDestination } from "./archive-files.js";
 import type { CuratorRecord, InventoryRoot } from "./model.js";
 import type { CuratorStore } from "./store.js";
 
@@ -67,16 +68,14 @@ async function removeLocked(options: RemovalOptions, root: InventoryRoot, genera
   // The paused path checks the same policy, generation and file snapshot under
   // the same lock, but does not revoke authority or touch the skill file.
   if (options.dryRunOnly) return true;
-  // Revoke authority first. A crash cannot leave a stale deletion intent that
-  // later targets a newly created same-name skill. No journal or tombstone remains.
+  const destination = await prepareArchiveDestination({ agentRoot: options.curator.agentRoot,
+    skillId: record.skillId, directory: target.directory });
+  // Revoke stale authority before moving; a crash cannot later target a new
+  // same-name generation. A failed move leaves the original directory intact.
   if (!options.curator.forgetGeneration(record)) return false;
   const finalTarget = await inspectTarget(options, root, record);
   if (!finalTarget || finalTarget.directoryIdentity !== target.directoryIdentity) return false;
-  await fs.unlink(target.filePath);
-  try { await fs.rmdir(target.directory); } catch (error) {
-    // Do not recursively delete content created by another writer.
-    if (!["ENOTEMPTY", "EEXIST", "ENOENT"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
-  }
+  await fs.rename(target.directory, destination);
   return true;
 }
 
@@ -88,8 +87,8 @@ async function removeGeneration(options: RemovalOptions, generationId: string): 
   return options.curator.withMutation([root.path], () => removeLocked(options, root, generationId));
 }
 
-// Aggregate return values only: no approvals, audit trail, identity list, archive,
-// or per-skill notification. Scheduling is separate from this bounded engine.
+// Aggregate return values only: no approvals or per-skill notification.
+// The archived directory lives outside every discovered skill root.
 export async function removeUnusedSkills(options: RemovalOptions): Promise<RemovalResult> {
   const result: RemovalResult = { removed: 0, held: 0, failed: 0 };
   if (options.dryRunOnly) result.eligible = 0;

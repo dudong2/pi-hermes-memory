@@ -34,7 +34,8 @@ export function readRunnerConfig(agentRoot: string): RunnerConfig | null {
     const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     if ((raw.curatorEnabled !== undefined && typeof raw.curatorEnabled !== "boolean")
-      || (raw.curatorPaused !== undefined && typeof raw.curatorPaused !== "boolean")) return null;
+      || (raw.curatorPaused !== undefined && typeof raw.curatorPaused !== "boolean")
+      || (raw.curatorArchiveEnabled !== undefined && typeof raw.curatorArchiveEnabled !== "boolean")) return null;
     const policy = normalizeCuratorPolicy(raw.curatorPolicy);
     if (!policy) return null;
     let memoryRoot = path.join(agentRoot, "pi-hermes-memory");
@@ -62,7 +63,10 @@ export function readRunnerConfig(agentRoot: string): RunnerConfig | null {
       if (!binding.available) return null;
       scopeKeys = binding.keys();
     }
-    return { enabled: raw.curatorEnabled !== false, paused: raw.curatorPaused === true, policy,
+    // Older Pi processes ignore curatorArchiveEnabled but still honor the
+    // retained pause flag. This allows a safe rolling switch to archiving.
+    return { enabled: raw.curatorEnabled !== false,
+      paused: raw.curatorPaused === true && raw.curatorArchiveEnabled !== true, policy,
       globalRoot: path.join(memoryRoot, "skills"), projectsRoot: path.join(agentRoot, projectsDir),
       resolutionMode, scopeCatalogDir, scopeKeys };
   } catch { return null; }

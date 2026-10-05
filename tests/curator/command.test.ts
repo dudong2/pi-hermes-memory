@@ -122,6 +122,13 @@ describe("Curator command and configuration", () => {
     assert.match(text, /그 외 2개/);
     assert.match(text, /관측 공백/);
     assert.doesNotMatch(text, /eligible-6/);
+    const adopted = formatCuratorDryRun({ stage: "C", dryRun: true, automaticArchiving: false,
+      evaluatedAt: null, evidenceScope: "calendar-elapsed-known-activity", policy: null,
+      policyStatus: "configured", candidateCount: 7, heldCount: 1, decisions,
+      limitations: [], warnings: [] }, { active: 1, archived: 0, eligible: 0, held: 1,
+      failed: 0, ids: ["global:held"] });
+    assert.match(adopted, /사용자 지정 기존 스킬.*활성 1개.*archive 후보 0개/);
+    assert.doesNotMatch(adopted, /생성 출처 확인 불가/);
   });
 
   it("does not prompt or notify on conditional removal", async () => {
@@ -135,9 +142,11 @@ describe("Curator command and configuration", () => {
     await assert.rejects(fs.stat(curator.dbPath), { code: "ENOENT" });
   });
 
-  it("rejects archive and restore subcommands", async () => {
+  it("does not archive while disabled and rejects unsupported restore", async () => {
     const c = command(null);
     await c.definition.handler("archive", c.ctx());
-    assert.match(c.messages[0], /보관·복원은 지원하지 않습니다/);
+    assert.deepEqual(c.messages, []);
+    await c.definition.handler("restore", c.ctx());
+    assert.match(c.messages[0], /복원은 아직 지원하지 않습니다/);
   });
 });

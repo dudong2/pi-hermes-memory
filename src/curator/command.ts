@@ -7,6 +7,9 @@ import type { SkillStore } from "../store/skill-store.js";
 import { inventorySkills } from "./inventory.js";
 import { dryRunCurator } from "./dry-run.js";
 import { removeUnusedSkills } from "./removal.js";
+import { readAdoptionManifest } from "./adoption-archive.js";
+import { runAdoptedStartupCycle } from "./adoption-runner.js";
+import { readRunnerConfig } from "./runner.js";
 import type { CuratorPolicyConfig, PolicyReason, PolicyReport } from "./policy.js";
 import type { CuratorStore } from "./store.js";
 import type { InventoryRoot } from "./model.js";
@@ -23,17 +26,25 @@ const REASON_LABELS = {
   "inventory-incomplete": "스킬 목록 조사 불완전",
 } as const satisfies Record<PolicyReason, string>;
 
-export function formatCuratorDryRun(report: PolicyReport & { warnings: string[] }): string {
+interface AdoptionPreview {
+  active: number; archived: number; eligible: number; held: number; failed: number; ids: string[];
+}
+
+export function formatCuratorDryRun(report: PolicyReport & { warnings: string[] }, adopted?: AdoptionPreview): string {
+  const adoptedIds = new Set(adopted?.ids ?? []);
+  const decisions = report.decisions.filter((row) => !adoptedIds.has(row.skillId));
+  const candidateCount = decisions.filter((row) => row.candidate).length;
   let policyStatus = "설정됨";
   if (report.policyStatus === "not-configured") policyStatus = "미설정";
   else if (report.policyStatus === "invalid") policyStatus = "설정 오류";
   const lines = [
-    "Curator dry-run — 조회만 (삭제하지 않음)",
-    `정책: ${policyStatus} · 후보: ${report.candidateCount}개 · 보류: ${report.heldCount}개`,
+    "Curator dry-run — 조회만 (파일 이동 없음)",
+    `정책: ${policyStatus} · 생성 확인 스킬 후보: ${candidateCount}개 · 보류: ${decisions.length - candidateCount}개`,
   ];
+  if (adopted) lines.push(`사용자 지정 기존 스킬 (전체 프로젝트): 활성 ${adopted.active}개 · archive 후보 ${adopted.eligible}개 · 보류 ${adopted.held}개 · 보관됨 ${adopted.archived}개${adopted.failed ? ` · 검사 실패 ${adopted.failed}개` : ""}`);
   const reasonCounts = new Map<PolicyReason, number>();
   const candidates: string[] = [];
-  for (const decision of report.decisions) {
+  for (const decision of decisions) {
     if (decision.candidate) candidates.push(decision.skillId);
     for (const reason of decision.reasons) reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
   }
@@ -44,12 +55,13 @@ export function formatCuratorDryRun(report: PolicyReport & { warnings: string[] 
     if (ranked.length > 6) lines.push(`- 그 외 ${ranked.length - 6}가지 사유`);
   }
   if (candidates.length) {
-    lines.push("후보 스킬 (삭제 확정 아님):");
+    lines.push("후보 스킬 (archive 확정 아님):");
     for (const skillId of candidates.slice(0, 5)) lines.push(`- ${skillId}`);
     if (candidates.length > 5) lines.push(`- 그 외 ${candidates.length - 5}개`);
   }
   if (report.warnings.length) {
-    const warnings = report.warnings.map((warning) => warning === "observation-gap" ? "관측 공백" : warning);
+    const warnings = report.warnings.map((warning) => warning === "observation-gap"
+      ? adopted ? "기존 생성 원장 관측 공백" : "관측 공백" : warning);
     lines.push(`경고: ${warnings.slice(0, 5).join(", ")}${warnings.length > 5 ? ` 외 ${warnings.length - 5}건` : ""}`);
   }
   lines.push("상세 판정: /memory-curator dry-run --json");
@@ -66,33 +78,45 @@ export function registerCuratorCommand(
   projectResolver?: (cwd: string) => { name: string | null; memoryDir: string | null },
 ): void {
   pi.registerCommand("memory-curator", {
-    description: "Curator 상태·dry-run·조건부 무알림 제거",
+    description: "Curator 상태·dry-run·조건부 archive",
     handler: async (args, ctx) => {
       let text: string;
       const action = args.trim().replace(/\s+/g, " ") || "status";
       const detailed = action === "dry-run --json";
-      if (action === "remove" && !curator) return;
-      if (!["inventory", "status", "dry-run", "remove"].includes(action) && !detailed) {
-        text = "사용법: /memory-curator [status|inventory|dry-run [--json]|remove] — 보관·복원은 지원하지 않습니다.";
+      if ((action === "archive" || action === "remove") && !curator) return;
+      if (!["inventory", "status", "dry-run", "archive", "remove"].includes(action) && !detailed) {
+        text = "사용법: /memory-curator [status|inventory|dry-run [--json]|archive] — remove는 archive의 이전 이름이며 복원은 아직 지원하지 않습니다.";
       } else if (!curator) {
         text = "Curator가 비활성화되어 있습니다(curatorEnabled: false). 기존 원장과 스킬은 유지됩니다.";
       } else {
         const roots: InventoryRoot[] = [{ scope: "global", path: skills.getGlobalSkillsDir() }];
         const project = projectResolver ? projectResolver(ctx.cwd) : detectProjectSkills(projectsMemoryDir, ctx.cwd);
         if (project.memoryDir && project.name) roots.push({ scope: "project", path: skillsRoot(project.memoryDir), projectName: project.name });
-        if (action === "remove") {
+        if (action === "archive" || action === "remove") {
           await removeUnusedSkills({ roots, curator, policy: currentPolicy ?? policy,
             basis: "calendar", allowCachedSessions: true });
+          await runAdoptedStartupCycle({ agentRoot: curator.agentRoot });
           return;
         }
         if (action === "dry-run" || detailed) {
           const report = await dryRunCurator({ roots, curator, policy,
             basis: "calendar", allowCachedSessions: true });
-          text = detailed ? JSON.stringify(report, null, 2) : formatCuratorDryRun(report);
+          const manifest = await readAdoptionManifest(curator.agentRoot);
+          let adopted: AdoptionPreview | undefined;
+          if (manifest) {
+            const preview = await runAdoptedStartupCycle({ agentRoot: curator.agentRoot, dryRunOnly: true });
+            adopted = { active: manifest.skills.filter((row) => row.state === "active").length,
+              archived: manifest.skills.filter((row) => row.state === "archived").length,
+              eligible: preview.eligible, held: preview.held, failed: preview.failed,
+              ids: manifest.skills.map((row) => row.skillId) };
+          }
+          text = detailed ? JSON.stringify({ ...report, ...(adopted ? { userDesignated: adopted } : {}) }, null, 2)
+            : formatCuratorDryRun(report, adopted);
         } else {
           const report = await inventorySkills({ roots, curator });
-          text = JSON.stringify({ stage: "E", automaticArchiving: false, automaticScheduling: false,
-            maintenanceTrigger: "process-start", ...report }, null, 2);
+          const config = readRunnerConfig(curator.agentRoot);
+          text = JSON.stringify({ stage: "E", automaticArchiving: Boolean(config?.enabled && !config.paused),
+            automaticScheduling: false, maintenanceTrigger: "process-start", ...report }, null, 2);
         }
       }
       if (ctx.hasUI) ctx.ui.notify(text, "info");

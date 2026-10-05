@@ -446,8 +446,8 @@ This means skills build up naturally over time without you having to ask.
 
 ### Skill Curator (Pi 시작 검사)
 
-Curator는 새 Pi 프로세스가 스킬을 발견하기 전에 확인된 관리 대상의 조건부 제거를 검사합니다. 스킬별 승인·삭제 이력·알림·보관·복원은 없으며, 조건·세대·파일 상태를 삭제 직전에 다시 확인합니다. 별도의 주기 실행 CLI도 제공하지만 예약 작업·데몬은 자동 설치하지 않습니다.
-`curatorEnabled: false`로 전체 기능을, `curatorPaused: true`로 시작 시 동일한 사전 검증만 하고 실제 제거를 중지할 수 있습니다. 시작 검사는 Pi 미실행 시간을 포함한 달력 기준을 사용하며, 열린 Pi의 낡은 스킬 목록은 자동으로 새로고침되지 않습니다. 저장 방식과 제한은 [Curator 문서](docs/curator/README.md)를 참고하세요.
+Curator는 새 Pi 프로세스가 스킬을 발견하기 전에 관리 대상의 조건부 **archive 이동**을 검사합니다. 생성 원장에서 확인된 스킬과 사용자가 명시적으로 지정한 기존 스킬을 구분하며, 후자는 별도 manifest에 현재 파일 지문을 기록합니다. archive는 자동 로드 경로 밖에 디렉터리 전체를 보존하고 자동 복원·purge는 하지 않습니다.
+`curatorPaused: true`는 검사만 수행하고 이동을 막습니다. 기존 Pi 프로세스를 유지하면서 archive 모드로 전환할 때는 `curatorArchiveEnabled: true`로 새 설치본에만 이동을 허용할 수 있습니다. Pi 미실행 시간을 포함한 달력 기준이며, 열린 Pi의 낡은 스킬 목록은 자동으로 새로고침되지 않습니다. 저장 방식과 한계는 [Curator 문서](docs/curator/README.md)를 참고하세요.
 
 ### Scope·Hindsight 통합 (3단계)
 
@@ -459,7 +459,7 @@ Curator는 새 Pi 프로세스가 스킬을 발견하기 전에 확인된 관리
 |---|---|
 | `/memory-insights` | Shows everything stored in memory and user profile |
 | `/memory-skills` | Opens an interactive skills manager for search, multi-select, move, and delete |
-| `/memory-curator [status\|inventory\|dry-run [--json]\|remove]` | 기본 dry-run은 요약, `--json`은 상세 판정; remove는 조건부 무알림 제거 |
+| `/memory-curator [status\|inventory\|dry-run [--json]\|archive]` | 후보 조회 또는 조건부 archive 이동 (`remove`는 이전 이름의 별칭) |
 | `/memory-consolidate` | Manually trigger memory consolidation to free space |
 | `/memory-interview` | Answer a few questions to pre-fill your user profile |
 | `/memory-switch-project` | List all project memories and their entry counts |

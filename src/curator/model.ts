@@ -42,8 +42,8 @@ export interface InventoryRow {
   skillId: string;
   scope: SkillScope;
   relativePath: string;
-  source: "creation-boundary" | "creation-history-matched" | "unknown";
-  generation: "verified" | "unverified";
+  source: "creation-boundary" | "user-designated-hermes" | "creation-history-matched" | "unknown";
+  generation: "verified" | "adopted-snapshot" | "unverified";
   generationId?: string | null;
   verificationKey?: string | null;
   cleanupEligible: false;

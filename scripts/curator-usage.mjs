@@ -77,11 +77,15 @@ function* sessionFiles() {
   }
 }
 
-async function report() {
+async function report(since = null) {
   let manifest;
   try { manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")); }
   catch { throw new Error("invalid usage cohort"); }
   if (!Number.isFinite(Date.parse(manifest?.start)) || !Array.isArray(manifest?.skills)) throw new Error("invalid usage cohort");
+  const cutoff = since ?? manifest.start;
+  if (!Number.isFinite(Date.parse(cutoff)) || new Date(cutoff).toISOString() !== cutoff || cutoff < manifest.start) {
+    throw new Error("invalid usage start");
+  }
   const byPath = new Map(manifest.skills.map((skill) => [skill.path, skill]));
   const usage = new Map(manifest.skills.map((skill) => [skill.id, { id: skill.id, read: 0, view: 0, deliveryCandidate: 0, lastSeenAt: null }]));
   const seen = new Set();
@@ -94,6 +98,8 @@ async function report() {
   };
   let files = 0;
   let unreadable = 0;
+  let malformedLines = 0;
+  let incompleteNestedCalls = 0;
   for (const file of sessionFiles()) {
     files++;
     let sessionId = file;
@@ -103,7 +109,8 @@ async function report() {
       const lines = readline.createInterface({ input: fs.createReadStream(file, { encoding: "utf8" }), crlfDelay: Infinity });
       for await (const line of lines) {
         let entry;
-        try { entry = JSON.parse(line); } catch { continue; }
+        try { entry = JSON.parse(line); }
+        catch { if (line.trim()) malformedLines++; continue; }
         if (entry.type === "session") {
           if (typeof entry.id === "string") sessionId = entry.id;
           if (typeof entry.cwd === "string") cwd = entry.cwd;
@@ -118,7 +125,7 @@ async function report() {
           }
         }
         const stamp = Date.parse(entry.timestamp);
-        if (!Number.isFinite(stamp) || stamp < Date.parse(manifest.start)) continue;
+        if (!Number.isFinite(stamp) || stamp < Date.parse(cutoff)) continue;
         let skill = null;
         let kind = null;
         if (message.role === "toolResult" && message.isError === false) {
@@ -151,6 +158,7 @@ async function report() {
         // Pi records successful nested codemode calls in the parent tool result;
         // their child results are not separate transcript messages.
         const nested = message.role === "toolResult" ? message.nestedCalls : null;
+        if (nested?.complete === false) incompleteNestedCalls++;
         if (!Array.isArray(nested?.calls)) continue;
         for (const call of nested.calls) {
           if (call?.status !== "ok" || !call.arguments || typeof call.id !== "string") continue;
@@ -164,16 +172,20 @@ async function report() {
     } catch { unreadable++; }
   }
   const rows = [...usage.values()].sort((a, b) => a.id.localeCompare(b.id));
-  console.log(JSON.stringify({ start: manifest.start, skillCount: rows.length, sessionFiles: files, unreadableFiles: unreadable,
-    partial: unreadable > 0, observedSkills: rows.filter((row) => row.read || row.view).length,
+  console.log(JSON.stringify({ start: manifest.start, since: cutoff, skillCount: rows.length,
+    sessionFiles: files, unreadableFiles: unreadable,
+    malformedLines, incompleteNestedCalls, partial: unreadable > 0 || malformedLines > 0 || incompleteNestedCalls > 0,
+    observedSkills: rows.filter((row) => row.read || row.view).length,
     possibleDeliverySkills: rows.filter((row) => row.deliveryCandidate).length,
     coverage: "Pi session records only; /skill delivery may be pasted; unobserved use is unknown; no deletion authority", skills: rows }, null, 2));
 }
 
-if (process.argv.length !== 3 || !["--init", "--report"].includes(process.argv[2])) {
-  console.error("Usage: node scripts/curator-usage.mjs --init|--report");
+const args = process.argv.slice(2);
+if (!(args.length === 1 && args[0] === "--init")
+  && !(args[0] === "--report" && (args.length === 1 || (args.length === 3 && args[1] === "--since")))) {
+  console.error("Usage: node scripts/curator-usage.mjs --init | --report [--since <ISO timestamp>]");
   process.exitCode = 2;
 } else {
-  try { if (process.argv[2] === "--init") initialize(); else await report(); }
+  try { if (args[0] === "--init") initialize(); else await report(args[2] ?? null); }
   catch (error) { console.error(error.message); process.exitCode = 1; }
 }

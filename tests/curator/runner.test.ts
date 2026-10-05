@@ -94,6 +94,18 @@ describe("Curator independent runner", () => {
     assert.equal((await f.cycle()).removed, 2);
   });
 
+  it("allows archive rollout with old-process pause retained and rejects malformed flags", async () => {
+    const f = await fixture();
+    await f.configure({ curatorPaused: true, curatorArchiveEnabled: "true" });
+    assert.equal(readRunnerConfig(f.root), null);
+    assert.equal((await f.cycle()).removed, 0);
+    await f.configure({ curatorPaused: true, curatorArchiveEnabled: true });
+    assert.equal(readRunnerConfig(f.root)?.paused, false);
+    assert.equal((await f.cycle()).removed, 2);
+    const archived = path.join(f.root, "pi-hermes-memory", "curator", "archive", "global", "unused-global");
+    assert.equal((await fs.readdir(archived)).length, 1);
+  });
+
   it("pins are applied across project and global roots", async () => {
     const f = await fixture();
     await f.configure({ curatorPolicy: { ...POLICY, pinnedSkillIds: ["global:unused-global", "project:project-one:unused-project"] } });

@@ -3,8 +3,9 @@ import * as path from "node:path";
 import { buildSkillId, parseFrontmatter, slugify } from "../store/skill-utils.js";
 import { MAX_SKILL_BYTES, readLimited, sameSnapshot, snapshotSkill, snapshotFingerprint, pathKey } from "./files.js";
 import { readCreationHistory } from "./history.js";
+import { readAdoptionManifest } from "./adoption-archive.js";
 import type { CuratorStore } from "./store.js";
-import type { CreationEvidence, CuratorRecord, InventoryReport, InventoryRoot } from "./model.js";
+import type { CreationEvidence, CuratorRecord, InventoryReport, InventoryRoot, SkillSnapshot } from "./model.js";
 
 export async function inventorySkills(options: {
   roots: InventoryRoot[];
@@ -24,6 +25,15 @@ export async function inventorySkills(options: {
   report.partial ||= history.partial;
   const active = new Map(records.filter((row) => row.state === "active")
     .map((row) => [`${row.rootKey}:${row.relativePath}`, row]));
+  let adopted = new Map<string, SkillSnapshot>();
+  try {
+    const manifest = await readAdoptionManifest(options.curator.agentRoot);
+    adopted = new Map(manifest?.skills.filter((row) => row.state === "active")
+      .map((row) => [row.skillId, row.snapshot]) ?? []);
+  } catch {
+    report.warnings.push("adoption-ledger-unavailable");
+    report.partial = true;
+  }
   const seen = new Set<string>();
   for (const root of options.roots) {
     const entries: import("node:fs").Dirent[] = [];
@@ -70,12 +80,15 @@ export async function inventorySkills(options: {
         const record = active.get(`${snapshot.rootKey}:${snapshot.relativePath}`);
         const verified = Boolean(record && sameSnapshot(record, snapshot))
           && report.warnings.every((warning) => !warning.startsWith("ledger-"));
+        const adoptedSnapshot = adopted.get(skillId);
+        const designated = !verified && Boolean(adoptedSnapshot && sameSnapshot(adoptedSnapshot, snapshot));
         const matchedHistory = history.creations.some((event: CreationEvidence) => event.pathKey === pathKey(filePath)
           && event.skillId === skillId && event.scope === root.scope && event.createdDate === meta.created);
         report.skills.push({
           skillId, scope: root.scope, relativePath: snapshot.relativePath,
-          source: verified ? "creation-boundary" : matchedHistory ? "creation-history-matched" : "unknown",
-          generation: verified ? "verified" : "unverified",
+          source: verified ? "creation-boundary" : designated ? "user-designated-hermes"
+            : matchedHistory ? "creation-history-matched" : "unknown",
+          generation: verified ? "verified" : designated ? "adopted-snapshot" : "unverified",
           generationId: verified ? record!.generationId : null,
           verificationKey: verified ? snapshotFingerprint(snapshot) : null, cleanupEligible: false,
           lastActivityAt: verified ? record!.lastActivityAt : null,
