@@ -15,11 +15,12 @@
 /memory-curator status
 /memory-curator inventory
 /memory-curator dry-run
+/memory-curator dry-run --json
 /memory-curator remove
 ```
 
 현재 전역 루트와 명령 실행 위치에 해당하는 프로젝트 루트만 조사한다. 전체 홈이나 과거 세션을 기본으로 스캔하지 않는다.
-조회는 대화형 알림 또는 비대화형 `curator-inventory` 메시지로 표시한다. `remove`는 확인 질문·개별 삭제 알림 없이 동작한다.
+`dry-run`은 후보·보류 수, 중복 집계된 주요 보류 사유, 경고와 최대 5개의 후보 ID만 간단히 표시한다. 전체 스킬별 판정·기간 경계가 필요할 때만 `dry-run --json`을 사용한다. 두 조회 모두 파일을 삭제하지 않으며 후보는 실제 삭제 확정이 아니다. 조회는 대화형 알림 또는 비대화형 `curator-inventory` 메시지로 표시한다. `remove`는 확인 질문·개별 삭제 알림 없이 동작한다.
 
 설정 파일의 `curatorEnabled` 기본값은 `true`다. 이는 출처·활동 판단 상태를 활성화한다. 조건부 제거는 사용자가 승인한 에이전트 생성 관리 대상에만 한정하며, 수동·외부·출처 불명 스킬로 범위를 확대하지 않는다.
 `false`로 설정하면 기록과 제거를 끄고, 기존 원장과 스킬 파일은 그대로 둔다. `curatorPaused: true`는 시작 시 **동일한 후보·잠금·파일 사전 검증을 수행**하되 권한 철회와 파일 삭제만 건너뛴다. 출처·활동 관측도 유지한다. 유효하지 않은 활성화·pause 값으로 제거 권한을 얻을 수 없다.

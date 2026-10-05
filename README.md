@@ -459,7 +459,7 @@ Curator는 새 Pi 프로세스가 스킬을 발견하기 전에 확인된 관리
 |---|---|
 | `/memory-insights` | Shows everything stored in memory and user profile |
 | `/memory-skills` | Opens an interactive skills manager for search, multi-select, move, and delete |
-| `/memory-curator [status\|inventory\|dry-run\|remove]` | 상태·후보 조회 또는 조건부 무알림 제거 |
+| `/memory-curator [status\|inventory\|dry-run [--json]\|remove]` | 기본 dry-run은 요약, `--json`은 상세 판정; remove는 조건부 무알림 제거 |
 | `/memory-consolidate` | Manually trigger memory consolidation to free space |
 | `/memory-interview` | Answer a few questions to pre-fill your user profile |
 | `/memory-switch-project` | List all project memories and their entry counts |
