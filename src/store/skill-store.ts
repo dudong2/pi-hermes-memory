@@ -7,9 +7,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { randomUUID } from "node:crypto";
-import { readGeneration, snapshotSkill, withGeneration } from "../curator/files.js";
-import type { SkillMutation, SkillMutationTracker, SkillSnapshot } from "../curator/model.js";
+import type { SkillMutationLock } from "./skill-mutation-lock.js";
 import { scanContent } from "./content-scanner.js";
 import {
   buildSkillId,
@@ -34,8 +32,7 @@ interface SkillStoreOptions {
   projectName?: string | null;
   legacySkillsDir?: string;
   migrationSentinelPath?: string;
-  curator?: SkillMutationTracker;
-  mutationLock?: Pick<SkillMutationTracker, "withMutation">;
+  mutationLock?: Pick<SkillMutationLock, "withMutation">;
 }
 
 interface SkillLocation {
@@ -165,12 +162,10 @@ export class SkillStore {
   private projectName: string | null;
   private legacySkillsDir: string;
   private migrationSentinelPath: string;
-  private readonly curator?: SkillMutationTracker;
-  private readonly mutationLock?: Pick<SkillMutationTracker, "withMutation">;
+  private readonly mutationLock?: Pick<SkillMutationLock, "withMutation">;
 
   constructor(options: SkillStoreOptions = {}) {
     const agentRoot = AGENT_ROOT;
-    this.curator = options.curator;
     this.mutationLock = options.mutationLock;
     this.globalSkillsDir = options.globalSkillsDir ?? path.join(agentRoot, "pi-hermes-memory", "skills");
     this.piGlobalSkillsDir = options.piGlobalSkillsDir ?? path.join(agentRoot, "skills");
@@ -372,10 +367,10 @@ export class SkillStore {
   }
 
   async create(name: string, description: string, body: string, scope?: SkillScope): Promise<SkillResult> {
-    return this.mutate("create", null, (store, generation) => store.createUnlocked(name, description, body, scope, generation));
+    return this.mutate((store) => store.createUnlocked(name, description, body, scope));
   }
 
-  private async createUnlocked(name: string, description: string, body: string, scope?: SkillScope, generation?: string): Promise<SkillResult> {
+  private async createUnlocked(name: string, description: string, body: string, scope?: SkillScope): Promise<SkillResult> {
     name = name.trim();
     description = description.trim();
     body = body.trim();
@@ -461,7 +456,7 @@ export class SkillStore {
       created: stamp,
       updated: stamp,
       body,
-    }), generation);
+    }));
 
     return {
       success: true,
@@ -474,7 +469,7 @@ export class SkillStore {
   }
 
   async patch(skillId: string, section: string, newContent: string): Promise<SkillResult> {
-    return this.mutate("modify", skillId, (store) => store.patchUnlocked(skillId, section, newContent));
+    return this.mutate((store) => store.patchUnlocked(skillId, section, newContent));
   }
 
   private async patchUnlocked(skillId: string, section: string, newContent: string): Promise<SkillResult> {
@@ -541,7 +536,7 @@ export class SkillStore {
   }
 
   async edit(skillId: string, description: string, body: string): Promise<SkillResult> {
-    return this.mutate("modify", skillId, (store) => store.editUnlocked(skillId, description, body));
+    return this.mutate((store) => store.editUnlocked(skillId, description, body));
   }
 
   private async editUnlocked(skillId: string, description: string, body: string): Promise<SkillResult> {
@@ -581,7 +576,7 @@ export class SkillStore {
   }
 
   async move(skillId: string, targetScope: SkillScope): Promise<SkillResult> {
-    return this.mutate("move", skillId, (store) => store.moveUnlocked(skillId, targetScope));
+    return this.mutate((store) => store.moveUnlocked(skillId, targetScope));
   }
 
   private async moveUnlocked(skillId: string, targetScope: SkillScope): Promise<SkillResult> {
@@ -675,8 +670,6 @@ export class SkillStore {
     }
 
     // Cross-device fallback: copy then remove source.
-    // Optional tracking metadata must not impose new size limits on ordinary moves.
-    const generation = await readGeneration(doc.path).catch(() => null);
     await this.atomicWrite(targetPath, formatFrontmatter({
       name: parsed.slug,
       displayName: doc.displayName,
@@ -685,7 +678,7 @@ export class SkillStore {
       created: doc.created,
       updated: doc.updated,
       body: doc.body,
-    }), generation ?? undefined);
+    }));
 
     try {
       await fs.unlink(doc.path);
@@ -724,7 +717,7 @@ export class SkillStore {
   }
 
   async delete(skillId: string): Promise<SkillResult> {
-    return this.mutate("delete", skillId, (store) => store.deleteUnlocked(skillId));
+    return this.mutate((store) => store.deleteUnlocked(skillId));
   }
 
   private async deleteUnlocked(skillId: string): Promise<SkillResult> {
@@ -950,57 +943,19 @@ export class SkillStore {
     };
   }
 
-  private async mutate(
-    kind: SkillMutation["kind"],
-    skillId: string | null,
-    operation: (store: SkillStore, generation?: string) => Promise<SkillResult>,
-  ): Promise<SkillResult> {
-    const coordinator = this.curator ?? this.mutationLock;
-    if (!coordinator) return operation(this);
-    const curator = this.curator;
-    // Freeze the project binding across awaits; resources_discover may rebind the parent.
+  private async mutate(operation: (store: SkillStore) => Promise<SkillResult>): Promise<SkillResult> {
+    if (!this.mutationLock) return operation(this);
+    // Freeze the project binding across awaits; resource discovery may rebind the parent.
     const worker = new SkillStore({
       globalSkillsDir: this.globalSkillsDir, piGlobalSkillsDir: this.piGlobalSkillsDir,
       projectSkillsDir: this.projectSkillsDir, projectName: this.projectName,
       legacySkillsDir: this.legacySkillsDir, migrationSentinelPath: this.migrationSentinelPath,
     });
     const roots = [worker.globalSkillsDir, ...(worker.projectSkillsDir ? [worker.projectSkillsDir] : [])];
-    if (!curator) return coordinator.withMutation(roots, () => operation(worker));
-    const capture = async (id: string, filePath: string, scope: SkillScope): Promise<SkillSnapshot | null> => {
-      const root = worker.getScopeRoot(scope);
-      if (!root) return null;
-      try {
-        return await snapshotSkill({ agentRoot: curator.agentRoot, root, filePath, skillId: id, scope });
-      } catch {
-        curator.noteFailure();
-        return null;
-      }
-    };
-    return coordinator.withMutation(roots, async () => {
-      const previous = skillId ? await worker.loadSkill(skillId) : null;
-      const before = previous ? await capture(previous.skillId, previous.path, previous.scope) : null;
-      const result = await operation(worker, kind === "create" ? randomUUID() : undefined);
-      if (!result.success) return result;
-      const after = kind !== "delete" && result.skillId && result.path && result.scope
-        ? await capture(result.skillId, result.path, result.scope) : null;
-      try {
-        await curator.record({ kind, before, after });
-      } catch {
-        // Recording failure must not reverse a completed user-visible file operation.
-        curator.noteFailure();
-      }
-      return result;
-    });
+    return this.mutationLock.withMutation(roots, () => operation(worker));
   }
 
-  private async atomicWrite(filePath: string, content: string, newGeneration?: string): Promise<void> {
-    let generation = newGeneration ?? null;
-    if (!newGeneration) {
-      try { generation = await readGeneration(filePath); } catch {
-        // An unreadable marker cannot authorize management of the replacement.
-      }
-    }
-    content = withGeneration(content, generation);
+  private async atomicWrite(filePath: string, content: string): Promise<void> {
     const dir = path.dirname(filePath);
     await fs.mkdir(dir, { recursive: true });
 

@@ -35,11 +35,7 @@ import { scheduleLiveSessionIndex, waitForLiveSessionIndex, SESSION_LIVE_INDEX_S
 import { parseSessionFile } from "./store/session-parser.js";
 import { registerMemoryTool } from "./tools/memory-tool.js";
 import { registerSkillTool } from "./tools/skill-tool.js";
-import { CuratorStore } from "./curator/store.js";
-import { registerCuratorCommand } from "./curator/command.js";
-import { registerCuratorObserver } from "./curator/observer-hooks.js";
-import { registerCuratorStartup } from "./curator/startup.js";
-import { readRunnerConfig } from "./curator/runner.js";
+import { SkillMutationLock } from "./store/skill-mutation-lock.js";
 import { registerSessionSearchTool } from "./tools/session-search-tool.js";
 import { registerMemorySearchTool } from "./tools/memory-search-tool.js";
 import { setupBackgroundReview } from "./handlers/background-review.js";
@@ -102,17 +98,10 @@ export function registerProjectSkillDiscoveryHandler(
   pi: Pick<ExtensionAPI, "on">,
   skillStore: SkillStore,
   projectsMemoryDir: string | undefined,
-  cacheState?: CuratorStore,
   projectResolver?: (cwd?: string) => ReturnType<typeof detectProject>,
 ): void {
-  pi.on("resources_discover", async (event, _ctx) => {
-    const resource = resolveProjectSkillDiscovery(skillStore, projectsMemoryDir, (event as { cwd?: string }).cwd, projectResolver);
-    if (!cacheState || !cacheState.list().some((record) => record.state === "active")) return resource;
-    return cacheState.withMutation(resource.skillPaths, async () => {
-      cacheState.registerCacheOwner();
-      return resource;
-    });
-  });
+  pi.on("resources_discover", (event) =>
+    resolveProjectSkillDiscovery(skillStore, projectsMemoryDir, (event as { cwd?: string }).cwd, projectResolver));
 }
 
 export default function (pi: ExtensionAPI) {
@@ -148,12 +137,8 @@ export default function (pi: ExtensionAPI) {
   // and from tool execute ctx.cwd.
   let projectName = "";
   let projectDisplayName = "";
-  const cacheState = new CuratorStore({ agentRoot });
-  const curator = config.curatorEnabled === false ? null : cacheState;
-  if (!curator) pi.on("session_shutdown", async () => { cacheState.close(); });
   const skillStore = new SkillStore({
-    curator: curator ?? undefined,
-    mutationLock: cacheState,
+    mutationLock: new SkillMutationLock(agentRoot),
     globalSkillsDir: path.join(globalDir, "skills"),
     piGlobalSkillsDir: path.join(agentRoot, "skills"),
     projectSkillsDir: null,
@@ -346,12 +331,7 @@ export default function (pi: ExtensionAPI) {
     await skillStore.ensureDiscoveredRoots();
   });
 
-  // After root migration/binding but before observation and Pi resource discovery.
-  if (curator) {
-    registerCuratorStartup(pi, agentRoot);
-    registerCuratorObserver(pi, curator, skillStore);
-  }
-  registerProjectSkillDiscoveryHandler(pi, skillStore, config.projectsMemoryDir, cacheState, resolveProject);
+  registerProjectSkillDiscoveryHandler(pi, skillStore, config.projectsMemoryDir, resolveProject);
 
   // ── 2. Inject memory policy by default; legacy mode keeps full frozen memory blocks ──
   pi.on("before_agent_start", async (event, _ctx) => {
@@ -422,10 +402,6 @@ export default function (pi: ExtensionAPI) {
   // ── 9. Register commands ──
   registerInsightsCommand(memoryPi, store, projectStoreRef, projectNameRef);
   registerSkillsCommand(pi, skillStore);
-  registerCuratorCommand(pi, curator, skillStore, config.projectsMemoryDir, config.curatorPolicy, () => {
-    const current = readRunnerConfig(agentRoot);
-    return !current?.enabled || current.paused ? null : current.policy;
-  }, resolveProject);
   registerInterviewCommand(memoryPi, store);
   registerSwitchProjectCommand(pi, config);
   registerLearnMemoryCommand(pi);

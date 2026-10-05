@@ -3,7 +3,6 @@
  */
 
 import type { ModelThinkingLevel, TextContent } from "@earendil-works/pi-ai";
-import type { CuratorPolicyConfig } from "./curator/policy.js";
 
 export type MemoryOverflowStrategy = "auto-consolidate" | "reject" | "fifo-evict";
 
@@ -105,12 +104,6 @@ export interface MemoryConfig {
    * Default: 0 (disabled).
    */
   sessionRetentionDays?: number;
-  /** Enable provenance and activity tracking; removal also requires explicit policy. Default: true. */
-  curatorEnabled?: boolean;
-  /** Suspend removal while preserving provenance and activity observation. */
-  curatorPaused?: boolean;
-  /** Explicit policy durations; undefined/unset or null/invalid never authorizes removal. */
-  curatorPolicy?: CuratorPolicyConfig | null;
   /** Keep cwd identity by default; catalog mode uses stable Scope IDs without cwd fallback. */
   projectResolutionMode?: "cwd" | "catalog" | "disabled";
   /** Existing Scope catalog directory, explicitly configured for catalog mode. */

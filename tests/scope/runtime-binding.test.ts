@@ -3,10 +3,9 @@ import test from "node:test";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createProject, createScope } from "../../src/scope/catalog.js";
-import { CuratorStore } from "../../src/curator/store.js";
 import { tempRoot } from "./fixtures.js";
 
-test("real extension callbacks bind memory, skills, searches and Curator to one stable Scope", async () => {
+test("real extension callbacks bind memory, skills and searches to one stable Scope", async () => {
   const root = await tempRoot("scope-runtime-");
   const workspace = join(root, "old-directory-name");
   const other = join(root, "unregistered");
@@ -34,8 +33,7 @@ test("real extension callbacks bind memory, skills, searches and Curator to one 
     registerTool(tool: { name: string; execute: (...args: any[]) => Promise<any> }) { tools[tool.name] = tool; },
     registerCommand(name: string, command: { handler: (...args: any[]) => Promise<any> }) { commands[name] = command; },
   };
-  const messages: string[] = [];
-  const ctx = (cwd: string) => ({ cwd, hasUI: true, ui: { notify: (message: string) => messages.push(message) },
+  const ctx = (cwd: string) => ({ cwd, hasUI: true, ui: { notify() {} },
     sessionManager: { getSessionId: () => "runtime", getSessionFile: () => undefined, getBranch: () => [], getHeader: () => null, getEntries: () => [] } });
   const current = ctx(workspace);
   try {
@@ -54,11 +52,10 @@ test("real extension callbacks bind memory, skills, searches and Curator to one 
     const skill = await tools.skill_manage.execute("scope-skill", { action: "create", name: "scope-workflow", description: "Reusable Scope workflow",
       scope: "project", content: "## Procedure\n1. Verify Scope identity" }, undefined, undefined, current);
     assert.equal(skill.details.skillId, "project:ws_runtime:scope-workflow");
-    await stat(join(memoryDir, "skills/scope-workflow/SKILL.md"));
-    const curator = new CuratorStore({ agentRoot: root });
-    try { assert.equal(curator.list()[0]?.skillId, "project:ws_runtime:scope-workflow"); } finally { curator.close(); }
-    await commands["memory-curator"].handler("inventory", current);
-    assert.match(messages.at(-1)!, /project:ws_runtime:scope-workflow/);
+    const skillFile = join(memoryDir, "skills/scope-workflow/SKILL.md");
+    assert.doesNotMatch(await readFile(skillFile, "utf8"), /pi-hermes-generation/);
+    assert.equal(commands["memory-curator"], undefined);
+    await assert.rejects(stat(join(root, "pi-hermes-memory", "curator")), { code: "ENOENT" });
     await assert.rejects(stat(join(root, "projects-memory", "old-directory-name")), { code: "ENOENT" });
     const search = await tools.memory_search.execute("scope-search", { query: "Stable Scope write", project: "Product/Backend" }, undefined, undefined, current);
     assert.match(JSON.stringify(search), /Stable Scope write/);

@@ -14,7 +14,6 @@ import { indexSession } from "../../src/store/session-indexer.js";
 import { rebindIndexedSessions } from "../../src/scope/session-binding.js";
 import { syncMarkdownMemoriesToSqlite } from "../../src/handlers/sync-markdown-memories.js";
 import { loadConfig } from "../../src/config.js";
-import { readRunnerConfig } from "../../src/curator/runner.js";
 import { tempRoot } from "./fixtures.js";
 
 async function fixture() {
@@ -162,17 +161,6 @@ test("scoped markdown mirror leaves legacy name-based memories and files untouch
     await syncMarkdownMemoriesToSqlite(db, global, "projects-memory", f.root);
     assert.equal((db.getDb().prepare("SELECT COUNT(*) AS count FROM memories WHERE project = ?").get("ws_stable") as { count: number }).count, 1);
   } finally { db.close(); }
-});
-
-test("Curator uses the configured Scope registry and fails closed on catalog loss", async () => {
-  const f = await fixture();
-  const file = join(f.root, "hermes-memory-config.json");
-  const policy = { inactivityDays: 10, minimumObservationDays: 14, creationGraceDays: 7,
-    modificationGraceDays: 3, adoptionGraceDays: 5, maxObservationAgeDays: 2 };
-  await writeFile(file, JSON.stringify({ ...f.config, curatorPolicy: policy }));
-  assert.equal(readRunnerConfig(f.root)?.scopeKeys?.has("ws_stable"), true);
-  await writeFile(join(f.dataDir, "scope-catalog.json"), "{broken");
-  assert.equal(readRunnerConfig(f.root), null);
 });
 
 test("invalid or previous external-resolution settings cannot silently authorize cwd fallback", async () => {

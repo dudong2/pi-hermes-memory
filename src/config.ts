@@ -19,7 +19,6 @@ import {
   DEFAULT_SESSION_RETENTION_DAYS,
 } from "./constants.js";
 import { AGENT_ROOT, normalizeConfiguredMemoryDir, normalizeProjectsMemoryDir } from "./paths.js";
-import { normalizeCuratorPolicy } from "./curator/policy.js";
 
 const MEMORY_OVERFLOW_STRATEGIES: readonly MemoryOverflowStrategy[] = ["auto-consolidate", "reject", "fifo-evict"];
 const SESSION_SEARCH_VARIANTS: readonly SessionSearchVariant[] = ["legacy", "anchors"];
@@ -72,9 +71,6 @@ const DEFAULT_CONFIG: MemoryConfig = {
   projectsMemoryDir: DEFAULT_PROJECTS_MEMORY_DIR,
   sessionSearch: { variant: "legacy" },
   quickCheckOnOpen: true,
-  // Removal still requires complete explicit policy; pausing keeps observation active.
-  curatorEnabled: true,
-  curatorPaused: false,
   projectResolutionMode: "cwd",
   hindsightEnabled: false,
   sessionRetentionDays: DEFAULT_SESSION_RETENTION_DAYS,
@@ -183,12 +179,6 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
         config.sessionSearch = { variant: parsed.sessionSearch.variant };
       }
       if (typeof parsed.quickCheckOnOpen === "boolean") config.quickCheckOnOpen = parsed.quickCheckOnOpen;
-      if (Object.prototype.hasOwnProperty.call(parsed, "curatorEnabled")) {
-        config.curatorEnabled = typeof parsed.curatorEnabled === "boolean" ? parsed.curatorEnabled : false;
-      }
-      if (Object.prototype.hasOwnProperty.call(parsed, "curatorPaused")) {
-        config.curatorPaused = typeof parsed.curatorPaused === "boolean" ? parsed.curatorPaused : true;
-      }
       if (Object.prototype.hasOwnProperty.call(parsed, "projectResolutionMode")) {
         config.projectResolutionMode = ["cwd", "catalog", "disabled"].includes(parsed.projectResolutionMode)
           ? parsed.projectResolutionMode : "disabled";
@@ -201,9 +191,6 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       }
       if (typeof parsed.scopeCatalogDir === "string") {
         config.scopeCatalogDir = normalizeConfiguredMemoryDir(parsed.scopeCatalogDir);
-      }
-      if (Object.prototype.hasOwnProperty.call(parsed, "curatorPolicy")) {
-        config.curatorPolicy = normalizeCuratorPolicy(parsed.curatorPolicy);
       }
       if (typeof parsed.llmModelOverride === "string") {
         const trimmed = parsed.llmModelOverride.trim();
