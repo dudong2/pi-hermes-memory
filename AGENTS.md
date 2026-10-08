@@ -4,7 +4,7 @@
 
 This is a Pi coding agent extension that brings Hermes-style persistent memory and a learning loop to any Pi user. After `pi install`, users get persistent memory across sessions, a background learning loop, and session-end flush.
 
-**v0.1 is complete** (119 tests, v0.1.0 tagged). Current work is **v0.2: Skills + Smart Curation** — see `docs/0.2/TASKS.md`.
+Historical plans and task lists under `docs/` are references, not standing work instructions.
 
 ## Architecture
 
@@ -42,20 +42,11 @@ This is a Pi coding agent extension that brings Hermes-style persistent memory a
 
 The implementation is ported from the Hermes agent harness. See `PLAN.md` → "Hermes Source File Reference Map" for exact files and line ranges to read.
 
-## Roadmap & Task Tracking
+## Documentation
 
-- **Roadmap**: `docs/ROADMAP.md` — full roadmap with Hermes competitive analysis, gap analysis, and phased plan (v0.1 → v0.5 → v1.0)
-- **v0.1 tasks** (complete): `docs/0.1/TASKS.md`
-- **v0.2 tasks** (current): `docs/0.2/TASKS.md` — Skills, auto-consolidation, correction detection, tool-call-aware nudge
-
-**Workflow:**
-1. Pick a task from `docs/0.2/TASKS.md`
-2. Mark it `[~]` (in progress)
-3. Implement it
-4. Mark it `[x]` (done) with the commit hash
-5. Move to the next task
-
-**Before starting any work, read `docs/0.2/TASKS.md` to see what's next.**
+- Do not use `docs/` as a log of work performed. Do not create or update plans, task trackers, investigation reports, test summaries, or release notes for routine work; report results in the reply instead.
+- Do not update `docs/0.2/TASKS.md` as part of the default workflow. Existing roadmap and task documents are historical references; read them only when relevant to the requested task.
+- Write repository documentation when the user explicitly requests it. If a change cannot be used safely without documentation, ask before adding it. A future repository-specific instruction may explicitly require shared documentation for team workflows.
 
 ## Development
 
