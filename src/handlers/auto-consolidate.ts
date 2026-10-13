@@ -150,14 +150,19 @@ function describeConsolidationFailure(
   result: { code: number; stderr?: string; killed?: boolean },
   timeoutMs: number,
 ): string {
-  const stderr = result.stderr?.trim();
-  const terminated = result.killed || result.code === 124 || result.code === 143;
-
-  if (terminated) {
-    return `Consolidation subprocess was terminated (likely timeout or cancellation). Timeout: ${timeoutMs}ms. Raise consolidationTimeoutMs if consolidation legitimately needs longer.`;
+  // The watchdog writes fixed markers and exits with 124 (timeout) or 143
+  // (cancellation). Never echo arbitrary child stderr: it can contain prompts
+  // or provider credentials, and Pi's outer timeout has no reliable cause.
+  if (result.code === 124 && result.stderr?.includes(`[pi-hermes-memory] child timed out after ${timeoutMs}ms; terminating process tree`)) {
+    return `Consolidation subprocess timed out after ${timeoutMs}ms.`;
   }
-
-  return `Consolidation process exited with code ${result.code}: ${stderr?.slice(0, 200) || "unknown error"}`;
+  if (result.code === 143 && result.stderr?.includes("[pi-hermes-memory] child cancellation requested; terminating process tree")) {
+    return "Consolidation subprocess was cancelled.";
+  }
+  if (result.killed) {
+    return "Consolidation subprocess was terminated by Pi (timeout or cancellation not confirmed).";
+  }
+  return `Consolidation process exited with code ${result.code} (child stderr omitted).`;
 }
 
 function buildConsolidationPrompt(
@@ -282,7 +287,7 @@ export async function triggerConsolidation(
       retryWithoutOverrides: true,
     }) as { code: number; stdout?: string; stderr?: string; killed?: boolean };
 
-    if (result.code === 0) {
+    if (result.code === 0 && !result.killed) {
       return { consolidated: true };
     }
     return {
@@ -302,9 +307,11 @@ export async function triggerConsolidation(
         error: "session replaced or reloaded during consolidation — will consolidate on next write",
       };
     }
+    const name = err instanceof Error && /^[A-Za-z][A-Za-z0-9]{0,39}$/.test(err.name)
+      ? err.name : "unknown error";
     return {
       consolidated: false,
-      error: `Consolidation failed: ${message.slice(0, 200)}`,
+      error: `Consolidation failed before completion (${name}; details omitted).`,
     };
   } finally {
     if (lock) {
