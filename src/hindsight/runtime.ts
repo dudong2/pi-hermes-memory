@@ -653,6 +653,11 @@ class OrchestratorRuntime {
       || !outcome || outcome.error || !outcome.memories.length) return;
     const block = formatMemoryContext(outcome.memories, event.systemPrompt);
     if (!block) return;
+    const options = event.systemPromptOptions;
+    if (options && "sections" in options) {
+      options.appendSystemPrompt = [options.appendSystemPrompt, block].filter(Boolean).join("\n\n");
+      return;
+    }
     return { systemPrompt: `${event.systemPrompt}\n\n${block}` };
   }
 

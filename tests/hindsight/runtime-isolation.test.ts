@@ -58,6 +58,18 @@ test("a late recall from the previous session cannot inject into the replacement
   await f.handlers.session_shutdown({}, f.second);
 });
 
+test("recall appends to structured prompt options without flattening sections", async () => {
+  const f = await fixture();
+  await f.handlers.session_start({}, f.first);
+  const systemPromptOptions = { sections: [{ name: "base", content: "base" }], appendSystemPrompt: "existing" };
+  const result = await f.handlers.before_agent_start({ prompt: "second question", systemPrompt: "base", systemPromptOptions }, f.first);
+  assert.equal(result, undefined);
+  assert.deepEqual(systemPromptOptions.sections, [{ name: "base", content: "base" }]);
+  assert.match(systemPromptOptions.appendSystemPrompt, /scope_first/);
+  assert.match(systemPromptOptions.appendSystemPrompt, /^existing/);
+  await f.handlers.session_shutdown({}, f.first);
+});
+
 test("a stale callback cannot write the new session user text under the old Scope", async () => {
   const f = await fixture();
   await f.handlers.session_start({}, f.first);
