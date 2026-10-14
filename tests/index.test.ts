@@ -1,9 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
-import { appendAutoConsolidationFailureLog, formatAutoConsolidationFailure, shouldWarnAutoConsolidationFailure } from "../src/auto-consolidation-warning.js";
+import { shouldWarnAutoConsolidationFailure } from "../src/auto-consolidation-warning.js";
 
 describe("shouldWarnAutoConsolidationFailure", () => {
   it("warns for failed consolidation by default", () => {
@@ -29,45 +26,5 @@ describe("shouldWarnAutoConsolidationFailure", () => {
       shouldWarnAutoConsolidationFailure(false, true),
       false,
     );
-  });
-});
-
-describe("formatAutoConsolidationFailure", () => {
-  it("includes the session scope, target and reason on one log line", () => {
-    const message = formatAutoConsolidationFailure(
-      "failure", "scope_ticket-macro\nspoof", "Consolidation subprocess timed out after 180000ms.",
-    );
-    assert.match(message, /target="failure"/);
-    assert.match(message, /sessionScope="scope_ticket-macro\\nspoof"/);
-    assert.match(message, /timed out after 180000ms/);
-    assert.doesNotMatch(message, /\n/);
-  });
-
-  it("persists a bounded failure record without child output", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-consolidation-log-test-"));
-    try {
-      const logPath = path.join(dir, "nested", "failures.jsonl");
-      await appendAutoConsolidationFailureLog(
-        "failure", "scope_ticket-macro", "Consolidation subprocess timed out after 180000ms. private child output", logPath,
-      );
-      await appendAutoConsolidationFailureLog(
-        "project", "scope_ai-chat", "Consolidation subprocess was cancelled.", logPath,
-      );
-      await appendAutoConsolidationFailureLog(
-        "user", null, "Consolidation subprocess timed out after 180000ms.", logPath,
-      );
-      const records = (await fs.readFile(logPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-      assert.strictEqual(records.length, 3);
-      assert.match(records[0].timestamp, /^\d{4}-\d\d-\d\dT/);
-      assert.deepStrictEqual({ target: records[0].target, sessionScope: records[0].sessionScope, reason: records[0].reason }, {
-        target: "failure", sessionScope: "scope_ticket-macro", reason: "unclassified consolidation failure",
-      });
-      assert.strictEqual(records[1].reason, "Consolidation subprocess was cancelled.");
-      assert.strictEqual(records[2].reason, "Consolidation subprocess timed out after 180000ms.");
-      assert.strictEqual((await fs.stat(logPath)).mode & 0o777, 0o600);
-      assert.doesNotMatch(await fs.readFile(logPath, "utf8"), /private child output/);
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
   });
 });

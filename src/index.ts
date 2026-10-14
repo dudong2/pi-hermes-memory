@@ -54,7 +54,7 @@ import { registerStandingPinCommand } from "./handlers/standing-pin.js";
 import { StandingInstructions } from "./store/standing-instructions.js";
 import { STANDING_FILE } from "./constants.js";
 import { loadConfig } from "./config.js";
-import { appendAutoConsolidationFailureLog, formatAutoConsolidationFailure, shouldWarnAutoConsolidationFailure } from "./auto-consolidation-warning.js";
+import { shouldWarnAutoConsolidationFailure } from "./auto-consolidation-warning.js";
 import { detectProject, detectProjectSkills } from "./project.js";
 import { ProjectScopeBinding } from "./scope/project-binding.js";
 import { rebindIndexedSessions } from "./scope/session-binding.js";
@@ -369,7 +369,6 @@ export default function (pi: ExtensionAPI) {
     toolTarget: "memory" | "user" | "failure" | "project",
     signal?: AbortSignal,
   ) => {
-    const sessionScope = projectNameRef();
     const result = await triggerConsolidation(
       pi,
       targetStore,
@@ -381,15 +380,8 @@ export default function (pi: ExtensionAPI) {
     );
     if (result.deferred) {
       console.info(`⏳ Auto-consolidation for '${toolTarget}' deferred: ${result.error ?? "another session holds the consolidation lock"}`);
-    } else if (!result.consolidated) {
-      try {
-        await appendAutoConsolidationFailureLog(toolTarget, sessionScope, result.error);
-      } catch {
-        console.warn("Auto-consolidation failure log could not be written (details omitted).");
-      }
-      if (shouldWarnAutoConsolidationFailure(config.autoConsolidationWarnOnFailure, result.consolidated)) {
-        console.warn(formatAutoConsolidationFailure(toolTarget, sessionScope, result.error));
-      }
+    } else if (shouldWarnAutoConsolidationFailure(config.autoConsolidationWarnOnFailure, result.consolidated)) {
+      console.warn(`⚠️ Auto-consolidation failed for '${toolTarget}': ${result.error ?? "no reason reported"}`);
     }
     return result;
   };
