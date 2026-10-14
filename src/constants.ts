@@ -406,19 +406,21 @@ Use memory_add or memory_replace to save. If this contradicts an existing entry,
 // ─── Skill tool description ───
 // Keep creation policy identical in the tool description and main-agent guidelines.
 export const SKILL_CREATION_GUIDELINES = [
+  "Consider a candidate after completing a complex task that required trial and error or multiple tool calls, when you discover a non-obvious reusable approach, or when the user teaches a workflow. These upstream cues trigger evaluation, not creation.",
+  "Before autonomous creation, call skill_manage(action='consider') once per candidate with name, scope, and four true/false criteria in order. Record every unmet criterion, not a guessed single cause. Only an approved candidate may be created using the returned approval_token. A user explicitly asking to save a skill may instead use explicit_user_request=true.",
   "Create a new skill only when the user explicitly asks to save a skill, or when all four reuse criteria below are met. Task complexity, trial and error, and multiple tool calls alone do not justify creation.",
   "1. Concrete future reuse: explain when you would look up this skill again.",
   "2. Independent procedure: capture a reusable workflow, not task outcomes, incident reports, investigation summaries, or temporary environment information.",
   "3. Not covered by existing skills: check the loaded skill index/context and inspect related skills before creating; prefer patch or update over creating a duplicate.",
   "4. Materially reduces future effort: preserve non-obvious, repeatable steps that save real work, not a few ordinary commands or explanations that are easy to rediscover.",
-  "If reuse value is uncertain, do not create a skill. Save only genuinely durable facts to memory when useful; otherwise save nothing.",
+  "If reuse value is uncertain, do not create a skill. Save only genuinely durable facts to memory when useful; otherwise save nothing. If no candidate was recognized, no reason can be recorded; never invent one.",
 ] as const;
 
 export const SKILL_TOOL_DESCRIPTION = `Manage reusable procedures and patterns as Pi-native skills that survive across sessions. Skills are procedural memory — they capture HOW to do something, not just what happened.
 
 This tool is intentionally named 'skill_manage' because it manages saved procedural skills; it is not a generic skill-discovery tool.
 
-Use create for a new skill, patch for a targeted section update, update for a full rewrite, view to inspect existing skills, and delete to remove obsolete ones. When creating a skill, scope is required: use global for portable workflows and project for procedures tied to this repo's paths, scripts, architecture, deploy steps, or conventions.
+Use consider for candidate evaluation (without creating a skill), insights for counts of recorded criteria, create for an approved or explicitly requested skill, patch for one section, update for a full rewrite, view to inspect, and delete to remove obsolete ones. On consider/create, scope is required: use global for portable workflows and project for repo-specific procedures. Candidate records contain only failed criterion numbers, not task text.
 
 WHEN TO CREATE A SKILL:
 ${SKILL_CREATION_GUIDELINES.join("\n")}

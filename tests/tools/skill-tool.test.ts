@@ -80,7 +80,8 @@ describe("registerSkillTool", () => {
         assert.match(guidance, /complexity.*trial and error.*multiple tool calls alone do not justify/i);
         assert.match(guidance, /user explicitly asks to save a skill/i);
         assert.match(guidance, /uncertain.*do not create.*durable facts.*memory.*otherwise save nothing/i);
-        assert.doesNotMatch(guidance, /after completing (?:a )?complex tasks? that required trial and error or multiple tool calls/i);
+        assert.match(guidance, /complex tasks? that required trial and error or multiple tool calls/i);
+        assert.match(guidance, /consider.*four.*criteria/i);
       } finally {
         await cleanup();
       }
@@ -90,6 +91,75 @@ describe("registerSkillTool", () => {
   it("keeps background reviews from creating or modifying skills", () => {
     assert.match(COMBINED_REVIEW_PROMPT, /Do NOT create or modify skills in this background review/);
     assert.match(DIRECT_REVIEW_SYSTEM_PROMPT, /Do NOT create or modify skills/);
+  });
+
+  it("records failed upstream candidates by criterion without creating a skill", async () => {
+    let captured: any;
+    const store = await makeStore();
+    registerSkillTool({ registerTool: (def: any) => { captured = def; } } as any, store);
+    try {
+      const rejected = JSON.parse((await captured.execute("tc-1", {
+        action: "consider", name: "candidate", scope: "global", criteria: [true, false, true, false],
+      }, undefined, undefined, undefined)).content[0].text);
+      assert.deepEqual(rejected.failedCriteria, [2, 4]);
+      assert.strictEqual(rejected.approvalToken, undefined);
+      assert.deepEqual(await store.loadIndex(), []);
+
+      const blocked = JSON.parse((await captured.execute("tc-2", {
+        action: "create", name: "candidate", description: "A candidate", scope: "global", content: "## Procedure\n1. Do it",
+      }, undefined, undefined, undefined)).content[0].text);
+      assert.strictEqual(blocked.success, false);
+      assert.deepEqual(await store.loadIndex(), []);
+
+      const insights = JSON.parse((await captured.execute("tc-3", { action: "insights" }, undefined, undefined, undefined)).content[0].text);
+      assert.strictEqual(insights.considered, 1);
+      assert.strictEqual(insights.rejected, 1);
+      assert.deepEqual(insights.failedCriteria, { "1": 0, "2": 1, "3": 0, "4": 1 });
+      const log = await fs.readFile(path.join(ROOT_DIR, "skill-candidate-decisions.jsonl"), "utf8");
+      assert.doesNotMatch(log, /candidate|A candidate/);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("allows a passing candidate once, bound to its name and scope", async () => {
+    let captured: any;
+    const store = await makeStore();
+    registerSkillTool({ registerTool: (def: any) => { captured = def; } } as any, store);
+    try {
+      const approved = JSON.parse((await captured.execute("tc-1", {
+        action: "consider", name: "approved-skill", scope: "global", criteria: [true, true, true, true],
+      }, undefined, undefined, undefined)).content[0].text);
+      assert.ok(approved.approvalToken);
+      const payload = { action: "create", name: "approved-skill", description: "Use when approved", scope: "global", content: "## Procedure\n1. Do it", approval_token: approved.approvalToken };
+      assert.strictEqual(JSON.parse((await captured.execute("tc-2", { ...payload, name: "different" }, undefined, undefined, undefined)).content[0].text).success, false);
+      assert.strictEqual(JSON.parse((await captured.execute("tc-3", payload, undefined, undefined, undefined)).content[0].text).success, true);
+      assert.strictEqual(JSON.parse((await captured.execute("tc-4", { ...payload, name: "again" }, undefined, undefined, undefined)).content[0].text).success, false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("does not reuse a project candidate approval in another project", async () => {
+    let captured: any;
+    const store = await makeStore();
+    registerSkillTool({ registerTool: (def: any) => { captured = def; } } as any, store);
+    try {
+      const approved = JSON.parse((await captured.execute("tc-1", {
+        action: "consider", name: "workflow", scope: "project", criteria: [true, true, true, true],
+      }, undefined, undefined, undefined)).content[0].text);
+      assert.ok(approved.approvalToken);
+      const otherDir = path.join(ROOT_DIR, "other-project-skills");
+      store.setProjectContext("other-project", otherDir);
+      const result = JSON.parse((await captured.execute("tc-2", {
+        action: "create", name: "workflow", scope: "project", description: "Reuse in this project",
+        content: "## Procedure\n1. Do it", approval_token: approved.approvalToken,
+      }, undefined, undefined, undefined)).content[0].text);
+      assert.strictEqual(result.success, false);
+      await assert.rejects(fs.stat(path.join(otherDir, "workflow", "SKILL.md")), { code: "ENOENT" });
+    } finally {
+      await cleanup();
+    }
   });
 
   it("create requires name, description, a body or structured fields, and scope", async () => {
@@ -137,6 +207,7 @@ describe("registerSkillTool", () => {
     const result = await captured.execute("tc-1", {
       action: "create",
       name: "test-skill",
+      explicit_user_request: true,
       description: "A test skill",
       scope: "global",
       content: "## Procedure\n1. Do it",
@@ -162,6 +233,7 @@ describe("registerSkillTool", () => {
     const result = await captured.execute("tc-1", {
       action: "create",
       name: "debug-typescript-errors",
+      explicit_user_request: true,
       description: "Debug TypeScript build failures in this repo",
       scope: "project",
       when_to_use: "Use when the repo's TypeScript build fails locally or in CI.",
@@ -202,6 +274,7 @@ describe("registerSkillTool", () => {
     const result = await captured.execute("tc-1", {
       action: "create",
       name: "release-app",
+      explicit_user_request: true,
       description: "Release this app",
       scope: "project",
       content: "## Procedure\n1. Run pnpm build",

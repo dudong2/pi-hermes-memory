@@ -49,8 +49,11 @@ test("real extension callbacks bind memory, skills and searches to one stable Sc
     const memory = await tools.memory_add.execute("scope-memory", { target: "project", content: "Stable Scope write" }, undefined, undefined, current);
     assert.equal(memory.details.success, true);
     assert.match(await readFile(join(memoryDir, "MEMORY.md"), "utf8"), /Stable Scope write/);
+    const candidate = await tools.skill_manage.execute("scope-candidate", { action: "consider", name: "scope-workflow",
+      scope: "project", criteria: [true, true, true, true] }, undefined, undefined, current);
+    assert.equal(candidate.details.approved, true);
     const skill = await tools.skill_manage.execute("scope-skill", { action: "create", name: "scope-workflow", description: "Reusable Scope workflow",
-      scope: "project", content: "## Procedure\n1. Verify Scope identity" }, undefined, undefined, current);
+      scope: "project", content: "## Procedure\n1. Verify Scope identity", approval_token: candidate.details.approvalToken }, undefined, undefined, current);
     assert.equal(skill.details.skillId, "project:ws_runtime:scope-workflow");
     const skillFile = join(memoryDir, "skills/scope-workflow/SKILL.md");
     assert.doesNotMatch(await readFile(skillFile, "utf8"), /pi-hermes-generation/);
@@ -63,7 +66,7 @@ test("real extension callbacks bind memory, skills and searches to one stable Sc
     const refused = await tools.memory_add.execute("unregistered", { target: "project", content: "Do not fall back" }, undefined, undefined, absent);
     assert.equal(refused.details.success, false);
     const refusedSkill = await tools.skill_manage.execute("unregistered-skill", { action: "create", name: "should-not-exist", description: "Forbidden fallback",
-      scope: "project", content: "body" }, undefined, undefined, absent);
+      scope: "project", content: "body", explicit_user_request: true }, undefined, undefined, absent);
     assert.equal(refusedSkill.details.success, false);
     await assert.rejects(stat(join(root, "projects-memory", "unregistered")), { code: "ENOENT" });
   } finally {

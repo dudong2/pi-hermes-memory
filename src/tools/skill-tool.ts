@@ -4,9 +4,12 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { SkillStore } from "../store/skill-store.js";
+import { recordSkillCandidate, skillCandidateInsights } from "../store/skill-candidate-log.js";
 import { SKILL_CREATION_GUIDELINES, SKILL_TOOL_DESCRIPTION } from "../constants.js";
 import { createSharedToolResultRenderer } from "./shared-output-view.js";
 import { skillResultView } from "./tool-result-views.js";
@@ -54,13 +57,19 @@ const SKILL_ID_PARAM = Type.String({
 });
 
 const SKILL_TOOL_PARAMETERS = Type.Object({
-  action: StringEnum(["create", "view", "patch", "update", "edit", "delete"] as const, {
+  action: StringEnum(["consider", "insights", "create", "view", "patch", "update", "edit", "delete"] as const, {
     description: "The skill action to perform.",
   }),
   name: Type.Optional(Type.String({
     description: "Skill name for create. e.g., 'debug-typescript-errors'.",
   })),
   skill_id: Type.Optional(SKILL_ID_PARAM),
+  criteria: Type.Optional(Type.Array(Type.Boolean(), {
+    minItems: 4, maxItems: 4,
+    description: "For consider: four booleans in order — concrete reuse, independent procedure, no existing skill, meaningful future value. False means this criterion blocks creation.",
+  })),
+  approval_token: Type.Optional(Type.String({ description: "For autonomous create: token returned by a passing consider action for this name, scope, and session." })),
+  explicit_user_request: Type.Optional(Type.Boolean({ description: "For create only when the user explicitly requested this skill. Do not use for autonomous creation." })),
   description: Type.Optional(Type.String({
     description: "Discovery-only summary of what the skill does and when to use it. Include the trigger signals a user would actually type (error strings, symptoms, phrasings) — Pi indexes skills by this field alone. Required for create; optional for update/edit; max 1024 chars.",
   })),
@@ -91,6 +100,14 @@ export const SKILL_MANAGE_TOOL_NAME = "skill_manage";
 
 export function registerSkillTool(pi: ExtensionAPI, store: SkillStore,
   bindProject?: (cwd?: string) => Promise<void>): void {
+  const approvals = new Map<string, {
+    name: string;
+    scope: "global" | "project";
+    sessionId: string | undefined;
+    projectName: string | null;
+    projectSkillsDir: string | null;
+  }>();
+  const decisionRoot = () => path.dirname(store.getGlobalSkillsDir());
   pi.registerTool({
     name: SKILL_MANAGE_TOOL_NAME,
     label: "Skill Manager",
@@ -108,12 +125,15 @@ export function registerSkillTool(pi: ExtensionAPI, store: SkillStore,
     ],
     renderResult: createSharedToolResultRenderer(skillResultView),
     parameters: SKILL_TOOL_PARAMETERS,
-    async execute(toolCallId, params, signal, onUpdate, ctx) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       await bindProject?.(ctx?.cwd);
       const skillParams = params as {
-        action: "create" | "view" | "patch" | "update" | "edit" | "delete";
+        action: "consider" | "insights" | "create" | "view" | "patch" | "update" | "edit" | "delete";
         name?: string;
         skill_id?: string;
+        criteria?: boolean[];
+        approval_token?: string;
+        explicit_user_request?: boolean;
         description?: string;
         scope?: "global" | "project";
         section?: string;
@@ -127,6 +147,9 @@ export function registerSkillTool(pi: ExtensionAPI, store: SkillStore,
         action,
         name,
         skill_id,
+        criteria,
+        approval_token,
+        explicit_user_request,
         description,
         scope,
         section,
@@ -166,7 +189,28 @@ export function registerSkillTool(pi: ExtensionAPI, store: SkillStore,
 
       let result;
       switch (action) {
-        case "create":
+        case "consider": {
+          if (!name || !scope || !Array.isArray(criteria) || criteria.length !== 4 || criteria.some((value) => typeof value !== "boolean")) {
+            result = { success: false, error: "consider requires name, scope, and exactly four boolean criteria." };
+            break;
+          }
+          const failedCriteria = criteria.flatMap((passed, index) => passed ? [] : [index + 1]);
+          await recordSkillCandidate(decisionRoot(), failedCriteria);
+          const approvalToken = failedCriteria.length ? undefined : randomUUID();
+          if (approvalToken) approvals.set(approvalToken, {
+            name, scope, sessionId: ctx?.sessionManager?.getSessionId(),
+            projectName: scope === "project" ? store.getProjectName() : null,
+            projectSkillsDir: scope === "project" ? store.getProjectSkillsDir() : null,
+          });
+          result = { success: true, approved: failedCriteria.length === 0, failedCriteria, ...(approvalToken ? { approvalToken } : {}) };
+          break;
+        }
+
+        case "insights":
+          result = { success: true, ...await skillCandidateInsights(decisionRoot()), note: "Only candidates submitted to consider are counted; no-candidate tasks have no inferred rejection reason." };
+          break;
+
+        case "create": {
           if (!name) {
             return {
               content: [{ type: "text", text: JSON.stringify({ success: false, error: "name is required for 'create' action." }) }],
@@ -192,8 +236,20 @@ export function registerSkillTool(pi: ExtensionAPI, store: SkillStore,
               details: {},
             };
           }
+          if (explicit_user_request !== true) {
+            const approval = approval_token ? approvals.get(approval_token) : undefined;
+            if (!approval || approval.name !== name || approval.scope !== scope
+              || approval.sessionId !== ctx?.sessionManager?.getSessionId()
+              || (scope === "project" && (approval.projectName !== store.getProjectName()
+                || approval.projectSkillsDir !== store.getProjectSkillsDir()))) {
+              result = { success: false, error: "Autonomous create requires a passing consider approval for this name, scope, and session. Rejected candidates must not create a skill." };
+              break;
+            }
+            if (approval_token) approvals.delete(approval_token);
+          }
           result = await store.create(name, description, createBodyResult.body, scope);
           break;
+        }
 
         case "view":
           if (!skill_id) {
@@ -322,7 +378,7 @@ export function registerSkillTool(pi: ExtensionAPI, store: SkillStore,
         default:
           result = {
             success: false,
-            error: `Unknown action '${action}'. Use: create, view, patch, update, delete`,
+            error: `Unknown action '${action}'. Use: consider, insights, create, view, patch, update, delete`,
           };
       }
 

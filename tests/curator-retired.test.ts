@@ -29,7 +29,8 @@ test("manual skill management works without any Curator command, ledger or gener
     const ctx = { cwd: root, hasUI: false, sessionManager: { getBranch: () => [] }, ui: { notify() {} } };
     for (const handler of handlers.session_start ?? []) await handler({ type: "session_start", reason: "startup" }, ctx);
     const result = await tools.skill_manage.execute("manual", { action: "create", name: "manual-retained",
-      description: "A reusable manual skill", scope: "global", content: "## Procedure\n1. Inspect the state." },
+      explicit_user_request: true, description: "A reusable manual skill", scope: "global",
+      content: "## Procedure\n1. Inspect the state." },
     undefined, undefined, ctx);
     assert.equal(result.details.success, true);
     const file = path.join(root, "pi-hermes-memory", "skills", "manual-retained", "SKILL.md");
