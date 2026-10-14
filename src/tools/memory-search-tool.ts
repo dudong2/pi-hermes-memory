@@ -27,7 +27,7 @@ function scopeLabel(project: string | null): string {
 export function registerMemorySearchTool(
   pi: ExtensionAPI,
   dbManager: DatabaseManager,
-  options: { usageTrackingEnabled?: boolean } = {},
+  options: { usageTrackingEnabled?: boolean; projectSelector?: (project: string) => string } = {},
 ): void {
   pi.registerTool({
     name: 'memory_search',
@@ -59,7 +59,7 @@ Returns matching memory entries with their mutation target, scope, and dates. Th
     }),
     execute: async (_id: string, args: { query: string; project?: string; target?: 'memory' | 'user' | 'failure' | 'project'; category?: string; limit?: number }) => {
       const query = args.query;
-      const project = args.project;
+      const project = typeof args.project === "string" && options.projectSelector ? options.projectSelector(args.project) : args.project;
       const target = args.target;
       const category = args.category as MemoryCategory | undefined;
       const limit = Math.min(args.limit || 10, 20);

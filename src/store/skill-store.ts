@@ -7,6 +7,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { SkillMutationLock } from "./skill-mutation-lock.js";
 import { scanContent } from "./content-scanner.js";
 import {
   buildSkillId,
@@ -31,6 +32,7 @@ interface SkillStoreOptions {
   projectName?: string | null;
   legacySkillsDir?: string;
   migrationSentinelPath?: string;
+  mutationLock?: Pick<SkillMutationLock, "withMutation">;
 }
 
 interface SkillLocation {
@@ -160,9 +162,11 @@ export class SkillStore {
   private projectName: string | null;
   private legacySkillsDir: string;
   private migrationSentinelPath: string;
+  private readonly mutationLock?: Pick<SkillMutationLock, "withMutation">;
 
   constructor(options: SkillStoreOptions = {}) {
     const agentRoot = AGENT_ROOT;
+    this.mutationLock = options.mutationLock;
     this.globalSkillsDir = options.globalSkillsDir ?? path.join(agentRoot, "pi-hermes-memory", "skills");
     this.piGlobalSkillsDir = options.piGlobalSkillsDir ?? path.join(agentRoot, "skills");
     this.projectSkillsDir = options.projectSkillsDir ?? null;
@@ -363,6 +367,10 @@ export class SkillStore {
   }
 
   async create(name: string, description: string, body: string, scope?: SkillScope): Promise<SkillResult> {
+    return this.mutate((store) => store.createUnlocked(name, description, body, scope));
+  }
+
+  private async createUnlocked(name: string, description: string, body: string, scope?: SkillScope): Promise<SkillResult> {
     name = name.trim();
     description = description.trim();
     body = body.trim();
@@ -461,6 +469,10 @@ export class SkillStore {
   }
 
   async patch(skillId: string, section: string, newContent: string): Promise<SkillResult> {
+    return this.mutate((store) => store.patchUnlocked(skillId, section, newContent));
+  }
+
+  private async patchUnlocked(skillId: string, section: string, newContent: string): Promise<SkillResult> {
     const sectionName = normalizeSectionName(section);
     if (!sectionName) return { success: false, error: "section is required for patch." };
 
@@ -524,6 +536,10 @@ export class SkillStore {
   }
 
   async edit(skillId: string, description: string, body: string): Promise<SkillResult> {
+    return this.mutate((store) => store.editUnlocked(skillId, description, body));
+  }
+
+  private async editUnlocked(skillId: string, description: string, body: string): Promise<SkillResult> {
     description = description.trim();
     body = body.trim();
 
@@ -560,6 +576,10 @@ export class SkillStore {
   }
 
   async move(skillId: string, targetScope: SkillScope): Promise<SkillResult> {
+    return this.mutate((store) => store.moveUnlocked(skillId, targetScope));
+  }
+
+  private async moveUnlocked(skillId: string, targetScope: SkillScope): Promise<SkillResult> {
     const doc = await this.loadSkill(skillId);
     if (!doc) return { success: false, error: `Skill '${skillId}' not found.` };
 
@@ -697,6 +717,10 @@ export class SkillStore {
   }
 
   async delete(skillId: string): Promise<SkillResult> {
+    return this.mutate((store) => store.deleteUnlocked(skillId));
+  }
+
+  private async deleteUnlocked(skillId: string): Promise<SkillResult> {
     const doc = await this.loadSkill(skillId);
     if (!doc) return { success: false, error: `Skill '${skillId}' not found.` };
 
@@ -917,6 +941,18 @@ export class SkillStore {
       created: doc.created,
       updated: doc.updated,
     };
+  }
+
+  private async mutate(operation: (store: SkillStore) => Promise<SkillResult>): Promise<SkillResult> {
+    if (!this.mutationLock) return operation(this);
+    // Freeze the project binding across awaits; resource discovery may rebind the parent.
+    const worker = new SkillStore({
+      globalSkillsDir: this.globalSkillsDir, piGlobalSkillsDir: this.piGlobalSkillsDir,
+      projectSkillsDir: this.projectSkillsDir, projectName: this.projectName,
+      legacySkillsDir: this.legacySkillsDir, migrationSentinelPath: this.migrationSentinelPath,
+    });
+    const roots = [worker.globalSkillsDir, ...(worker.projectSkillsDir ? [worker.projectSkillsDir] : [])];
+    return this.mutationLock.withMutation(roots, () => operation(worker));
   }
 
   private async atomicWrite(filePath: string, content: string): Promise<void> {

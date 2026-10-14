@@ -78,6 +78,8 @@ const DEFAULT_CONFIG: MemoryConfig = {
   projectsMemoryDir: DEFAULT_PROJECTS_MEMORY_DIR,
   sessionSearch: { variant: "legacy" },
   quickCheckOnOpen: true,
+  projectResolutionMode: "cwd",
+  hindsightEnabled: false,
   sessionRetentionDays: DEFAULT_SESSION_RETENTION_DAYS,
 };
 
@@ -198,6 +200,19 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
         config.sessionSearch = { variant: parsed.sessionSearch.variant };
       }
       if (typeof parsed.quickCheckOnOpen === "boolean") config.quickCheckOnOpen = parsed.quickCheckOnOpen;
+      if (Object.prototype.hasOwnProperty.call(parsed, "projectResolutionMode")) {
+        config.projectResolutionMode = ["cwd", "catalog", "disabled"].includes(parsed.projectResolutionMode)
+          ? parsed.projectResolutionMode : "disabled";
+      }
+      if (Object.prototype.hasOwnProperty.call(parsed, "hindsightEnabled")) {
+        config.hindsightEnabled = parsed.hindsightEnabled === true;
+      }
+      if (typeof parsed.hindsightSettingsPath === "string") {
+        config.hindsightSettingsPath = normalizeConfiguredMemoryDir(parsed.hindsightSettingsPath);
+      }
+      if (typeof parsed.scopeCatalogDir === "string") {
+        config.scopeCatalogDir = normalizeConfiguredMemoryDir(parsed.scopeCatalogDir);
+      }
       if (typeof parsed.llmModelOverride === "string") {
         const trimmed = parsed.llmModelOverride.trim();
         if (trimmed.length > 0) config.llmModelOverride = trimmed;

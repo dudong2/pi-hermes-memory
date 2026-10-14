@@ -195,21 +195,24 @@ export async function syncMarkdownMemoriesToSqlite(
   await reconcileFile(globalUserFile, 'user');
   await reconcileFile(globalFailureFile, 'failure');
 
-  // Startup passes onlyProjects (global files + current project) so boot cost
-  // never scales with the projects-memory folder count. The full sweep below
-  // stays for /memory-sync-markdown, which is the repair path for the scopes
-  // a scoped startup skips (including orphan pruning outside the scope).
+  const allowedKeys = dbManager.getProjectMemoryKeys?.();
+  const projectsRoot = path.resolve(agentRoot, projectsMemoryDir ?? 'projects-memory');
+  // Startup reconciles only the current project, while the manual command
+  // still sweeps all registered scopes for repair.
   const scopedProjects = options?.onlyProjects ?? null;
   if (scopedProjects) {
-    const projectsRoot = path.resolve(agentRoot, projectsMemoryDir ?? 'projects-memory');
-    for (const projectName of new Set(scopedProjects)) {
+    const projects = [...new Set(scopedProjects)].filter((name) => !allowedKeys || allowedKeys.has(name));
+    for (const projectName of projects) {
       const memoryFile = resolveAuthoritativeMemoryFile(projectsRoot, projectName);
       await reconcileFile(memoryFile, 'memory', projectName);
     }
-    return { ...counters, projectCount: new Set(scopedProjects).size };
+    return { ...counters, projectCount: projects.length };
   }
 
-  const projects = scanProjectDirs(agentRoot, globalDir, projectsMemoryDir);
+  const projects = allowedKeys
+    ? [...allowedKeys].map((name) => ({ name, memoryFile: path.join(projectsRoot, name, MEMORY_FILE) }))
+      .filter(({ memoryFile }) => fs.existsSync(memoryFile))
+    : scanProjectDirs(agentRoot, globalDir, projectsMemoryDir);
   const projectFiles = new Map(projects.map((project) => [project.name, project.memoryFile]));
   const mirroredProjects = dbManager.getDb().prepare(`
     SELECT DISTINCT project
@@ -220,14 +223,15 @@ export async function syncMarkdownMemoriesToSqlite(
     ...projectFiles.keys(),
     ...mirroredProjects.map(({ project }) => project),
   ]);
-  const projectsRoot = path.resolve(agentRoot, projectsMemoryDir ?? 'projects-memory');
   for (const projectName of projectNames) {
+    if (allowedKeys && !allowedKeys.has(projectName)) continue;
     const memoryFile = projectFiles.get(projectName)
       ?? resolveAuthoritativeMemoryFile(projectsRoot, projectName);
+    if (allowedKeys && (!memoryFile || !fs.existsSync(memoryFile))) continue;
     await reconcileFile(memoryFile, 'memory', projectName);
   }
 
-  return { ...counters, projectCount: projectNames.size };
+  return { ...counters, projectCount: [...projectNames].filter((name) => !allowedKeys || allowedKeys.has(name)).length };
 }
 
 export async function migrateThenSyncMarkdownMemories(

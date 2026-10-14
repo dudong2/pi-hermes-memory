@@ -63,6 +63,7 @@
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
+    "jiti": "2.7.0",
     "strip-ansi": "7.2.0"
   }
 }

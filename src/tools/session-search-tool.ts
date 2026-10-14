@@ -25,6 +25,7 @@ interface SearchResult {
 
 interface SessionSearchToolOptions {
   sessionsDir?: string;
+  projectSelector?: (project: string) => string;
 }
 
 const DEFAULT_SESSIONS_DIR = path.join(AGENT_ROOT, 'sessions');
@@ -60,7 +61,7 @@ export function registerSessionSearchTool(
     return;
   }
 
-  registerLegacySessionSearchTool(pi, dbManager);
+  registerLegacySessionSearchTool(pi, dbManager, options.projectSelector);
 }
 
 function registerAnchorSessionSearchTool(pi: ExtensionAPI, sessionsDir: string): void {
@@ -143,7 +144,8 @@ function compactReason(reason: string | undefined): string {
   return oneLine.length <= 180 ? oneLine : `${oneLine.slice(0, 177)}...`;
 }
 
-function registerLegacySessionSearchTool(pi: ExtensionAPI, dbManager: DatabaseManager): void {
+function registerLegacySessionSearchTool(pi: ExtensionAPI, dbManager: DatabaseManager,
+  projectSelector?: (project: string) => string): void {
   pi.registerTool({
     name: 'session_search',
     label: 'Session Search',
@@ -178,7 +180,7 @@ Returns bounded conversation snippets with session dates and project context. La
     }),
     execute: async (_id: string, args: { query: string; project?: string; role?: string; limit?: number; snippetChars?: number }) => {
       const query = args.query;
-      const project = args.project;
+      const project = typeof args.project === "string" && projectSelector ? projectSelector(args.project) : args.project;
       const role = args.role;
       const requestedLimit = Number.isFinite(args.limit) ? Math.floor(args.limit!) : 10;
       const limit = Math.min(Math.max(requestedLimit, 1), 20);

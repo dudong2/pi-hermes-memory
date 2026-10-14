@@ -35,6 +35,7 @@ import { scheduleLiveSessionIndex, waitForLiveSessionIndex, SESSION_LIVE_INDEX_S
 import { parseSessionFile } from "./store/session-parser.js";
 import { registerMemoryTool } from "./tools/memory-tool.js";
 import { registerSkillTool } from "./tools/skill-tool.js";
+import { SkillMutationLock } from "./store/skill-mutation-lock.js";
 import { registerSessionSearchTool } from "./tools/session-search-tool.js";
 import { registerMemorySearchTool } from "./tools/memory-search-tool.js";
 import { setupBackgroundReview } from "./handlers/background-review.js";
@@ -53,11 +54,15 @@ import { registerStandingPinCommand } from "./handlers/standing-pin.js";
 import { StandingInstructions } from "./store/standing-instructions.js";
 import { STANDING_FILE } from "./constants.js";
 import { loadConfig } from "./config.js";
-import { shouldWarnAutoConsolidationFailure } from "./auto-consolidation-warning.js";
+import { appendAutoConsolidationFailureLog, formatAutoConsolidationFailure, shouldWarnAutoConsolidationFailure } from "./auto-consolidation-warning.js";
 import { detectProject, detectProjectSkills } from "./project.js";
+import { ProjectScopeBinding } from "./scope/project-binding.js";
+import { rebindIndexedSessions } from "./scope/session-binding.js";
 import { buildPromptContext } from "./prompt-context.js";
 import { migrateLegacyProjectMemoryDirs } from "./project-memory-migration.js";
-import { AGENT_ROOT } from "./paths.js";
+import { AGENT_ROOT, resolveProjectsRoot } from "./paths.js";
+import { registerHindsightIntegration } from "./hindsight/integration.js";
+import { syncScopeStoreMetadata } from "./hindsight/store-metadata.js";
 import { isDatabaseMigrationPending } from "./extension-root-migration.js";
 import { measureLifecycle, measureLifecycleSync } from "./lifecycle-timing.js";
 import { createMemoryInitializer, withMemoryInitialization, type EnsureMemoryReady } from "./memory-initialization.js";
@@ -66,8 +71,18 @@ export function resolveProjectSkillDiscovery(
   skillStore: SkillStore,
   projectsMemoryDir: string | undefined,
   cwd?: string,
+  projectResolver?: (cwd?: string) => ReturnType<typeof detectProject>,
 ): { skillPaths: string[] } {
-  const detected = detectProjectSkills(projectsMemoryDir, cwd);
+  let detected: ReturnType<typeof detectProjectSkills>;
+  if (projectResolver) {
+    const project = projectResolver(cwd);
+    detected = {
+      ...project,
+      skillsDir: project.memoryDir ? path.join(project.memoryDir, "skills") : null,
+    };
+  } else {
+    detected = detectProjectSkills(projectsMemoryDir, cwd);
+  }
   skillStore.setProjectContext(detected.name, detected.skillsDir);
 
   // Pi auto-discovers its own `~/.pi/agent/skills/`, but this extension keeps
@@ -83,14 +98,20 @@ export function registerProjectSkillDiscoveryHandler(
   pi: Pick<ExtensionAPI, "on">,
   skillStore: SkillStore,
   projectsMemoryDir: string | undefined,
+  projectResolver?: (cwd?: string) => ReturnType<typeof detectProject>,
 ): void {
-  pi.on("resources_discover", async (event, _ctx) => {
-    return resolveProjectSkillDiscovery(skillStore, projectsMemoryDir, (event as { cwd?: string }).cwd);
-  });
+  pi.on("resources_discover", (event) =>
+    resolveProjectSkillDiscovery(skillStore, projectsMemoryDir, (event as { cwd?: string }).cwd, projectResolver));
 }
 
 export default function (pi: ExtensionAPI) {
   const config = loadConfig();
+  const scopeBinding = new ProjectScopeBinding(config);
+  const resolveProject = (cwd?: string) => {
+    scopeBinding.refresh();
+    dbManager.setProjectMemoryKeys(scopeBinding.scoped ? scopeBinding.keys() : undefined);
+    return scopeBinding.resolve(cwd);
+  };
   const lazy = config.lazyInitialization === true && config.memoryMode === "policy-only";
   let sessionContext: ExtensionContext | undefined;
 
@@ -115,7 +136,9 @@ export default function (pi: ExtensionAPI) {
   // project identity from process.cwd() here — bind from session_start ctx.cwd
   // and from tool execute ctx.cwd.
   let projectName = "";
+  let projectDisplayName = "";
   const skillStore = new SkillStore({
+    mutationLock: new SkillMutationLock(agentRoot),
     globalSkillsDir: path.join(globalDir, "skills"),
     piGlobalSkillsDir: path.join(agentRoot, "skills"),
     projectSkillsDir: null,
@@ -124,6 +147,10 @@ export default function (pi: ExtensionAPI) {
     migrationSentinelPath: path.join(globalDir, ".skills-migrated-to-extension-storage"),
   });
   const dbManager = new DatabaseManager(globalDir);
+  if (scopeBinding.scoped) {
+    dbManager.setSessionProjectResolver((cwd) => scopeBinding.sessionProject(cwd));
+    dbManager.setProjectMemoryKeys(scopeBinding.keys());
+  }
   let databaseClosed = false;
   const backfillState: SessionBackfillState = { inProgress: false, promise: null };
   dbManager.setQuickCheckOnOpen(config.quickCheckOnOpen ?? true);
@@ -137,7 +164,7 @@ export default function (pi: ExtensionAPI) {
   const sessionsDir = path.join(agentRoot, "sessions");
 
   const refreshSkillProjectContext = (cwd?: string) => {
-    const resource = resolveProjectSkillDiscovery(skillStore, config.projectsMemoryDir, cwd);
+    const resource = resolveProjectSkillDiscovery(skillStore, config.projectsMemoryDir, cwd, resolveProject);
     return {
       name: skillStore.getProjectName(),
       skillsDir: skillStore.getProjectSkillsDir(),
@@ -148,7 +175,7 @@ export default function (pi: ExtensionAPI) {
   // Keep project memory available for users upgrading from the old
   // ~/.pi/agent/<project>/ layout. This is non-destructive: legacy folders
   // remain in place while entries are copied/merged into projects-memory/.
-  if (!lazy) migrateLegacyProjectMemoryDirs(agentRoot, config.projectsMemoryDir);
+  if (!lazy && !scopeBinding.scoped) migrateLegacyProjectMemoryDirs(agentRoot, config.projectsMemoryDir);
   // Project-scoped store: ~/.pi/agent/<projectsMemoryDir>/<project_name>/
   // Bound from session/tool ctx.cwd, never from factory process.cwd().
   const createProjectStore = (projectInfo: ReturnType<typeof detectProject>): MemoryStore | null => {
@@ -164,11 +191,12 @@ export default function (pi: ExtensionAPI) {
   let projectLoad: Promise<void> | undefined;
   const projectStoreRef = () => projectStore;
   const projectNameRef = () => projectName;
+  const projectDisplayNameRef = () => projectDisplayName;
   let configureProjectStore: (candidate: MemoryStore | null) => void = () => {};
   let configureMemoryToolProjectStore: (candidate: MemoryStore | null) => void = () => {};
   const bindProjectFromCwd = async (cwd?: string): Promise<void> => {
     if (!cwd) return;
-    const nextProject = detectProject(config.projectsMemoryDir, cwd);
+    const nextProject = resolveProject(cwd);
     const nextProjectMemoryDir = nextProject.memoryDir ?? null;
     if (nextProjectMemoryDir !== projectMemoryDir) {
       projectMemoryDir = nextProjectMemoryDir;
@@ -179,12 +207,16 @@ export default function (pi: ExtensionAPI) {
         projectMemoryDir = null;
         projectStore = null;
         projectName = "";
+        projectDisplayName = "";
+        configureProjectStore(null);
+        configureMemoryToolProjectStore(null);
         projectLoad = undefined;
         throw error;
       });
     }
     await projectLoad;
     projectName = nextProject.name ?? "";
+    projectDisplayName = nextProject.displayName ?? projectName;
   };
   // Never written by review, consolidation or the correction detector — see
   // store/standing-instructions.ts for why provenance has to be structural.
@@ -195,7 +227,7 @@ export default function (pi: ExtensionAPI) {
 
   const initialization = createMemoryInitializer(async (ctx) => {
     const timingPrefix = lazy ? "memory-init" : "session-start";
-    if (lazy) migrateLegacyProjectMemoryDirs(agentRoot, config.projectsMemoryDir);
+    if (lazy && !scopeBinding.scoped) migrateLegacyProjectMemoryDirs(agentRoot, config.projectsMemoryDir);
     if (!persistenceInitialized) {
       try {
         await measureLifecycle(`${timingPrefix}.persistence-sync`, async () => {
@@ -220,6 +252,7 @@ export default function (pi: ExtensionAPI) {
             },
           );
         });
+        if (scopeBinding.scoped && scopeBinding.available) rebindIndexedSessions(dbManager);
         persistenceInitialized = true;
       } catch (error) {
         if (lazy) throw error;
@@ -287,6 +320,14 @@ export default function (pi: ExtensionAPI) {
   const ensureMemoryReady: EnsureMemoryReady = (ctx, signal) => initialization.ensure(ctx, signal);
   const memoryPi = withMemoryInitialization(pi, initialization);
 
+  // When explicitly enabled, resolve/onboard Scope before the working-memory
+  // startup snapshot. The default remains inactive while the old owner runs.
+  registerHindsightIntegration(pi, config, async (scope) => {
+    await syncScopeStoreMetadata(scope, resolveProjectsRoot(config.projectsMemoryDir));
+    scopeBinding.refresh();
+    if (initialization.isReady()) await bindProjectFromCwd(scope.workspaceRoot);
+  });
+
   // Skills and pinned instructions must be available even without a lookup.
   pi.on("session_start", async (_event, ctx) => {
     sessionContext = ctx;
@@ -298,11 +339,11 @@ export default function (pi: ExtensionAPI) {
     await skillStore.ensureDiscoveredRoots();
   });
 
-  registerProjectSkillDiscoveryHandler(pi, skillStore, config.projectsMemoryDir);
+  registerProjectSkillDiscoveryHandler(pi, skillStore, config.projectsMemoryDir, resolveProject);
 
   // ── 2. Inject memory policy by default; legacy mode keeps full frozen memory blocks ──
   pi.on("before_agent_start", async (event, _ctx) => {
-    const promptContext = await buildPromptContext(config, store, projectStoreRef(), projectNameRef(), standingStore);
+    const promptContext = await buildPromptContext(config, store, projectStoreRef(), projectDisplayNameRef(), standingStore);
     if (!promptContext) return;
 
     // pi 0.86+ hands handlers a normalized clone of these options and re-renders
@@ -334,7 +375,7 @@ export default function (pi: ExtensionAPI) {
   configureMemoryToolProjectStore = registerMemoryTool(memoryPi, store, projectStoreRef, dbManager, projectNameRef, bindProjectFromCwd);
 
   // ── 4. Register the skill tool ──
-  registerSkillTool(pi, skillStore);
+  registerSkillTool(pi, skillStore, async (cwd) => { refreshSkillProjectContext(cwd); });
 
   // ── 5. Setup background learning loop (with tool-call-aware nudge) ──
   setupBackgroundReview(pi, store, projectStoreRef, config, {
@@ -355,6 +396,7 @@ export default function (pi: ExtensionAPI) {
     toolTarget: "memory" | "user" | "failure" | "project",
     signal?: AbortSignal,
   ) => {
+    const sessionScope = projectNameRef();
     const result = await triggerConsolidation(
       pi,
       targetStore,
@@ -369,8 +411,15 @@ export default function (pi: ExtensionAPI) {
     );
     if (result.deferred) {
       console.info(`⏳ Auto-consolidation for '${toolTarget}' deferred: ${result.error ?? "another session holds the consolidation lock"}`);
-    } else if (shouldWarnAutoConsolidationFailure(config.autoConsolidationWarnOnFailure, result.consolidated, result.partial === true)) {
-      console.warn(`⚠️ Auto-consolidation ${result.partial ? "partially " : ""}failed for '${toolTarget}': ${result.error ?? "no reason reported"}`);
+    } else if (!result.consolidated || result.partial) {
+      try {
+        await appendAutoConsolidationFailureLog(toolTarget, sessionScope, result.error);
+      } catch {
+        console.warn("Auto-consolidation failure log could not be written (details omitted).");
+      }
+      if (shouldWarnAutoConsolidationFailure(config.autoConsolidationWarnOnFailure, result.consolidated, result.partial === true)) {
+        console.warn(formatAutoConsolidationFailure(toolTarget, sessionScope, result.error));
+      }
     }
     return result;
   };
@@ -395,7 +444,7 @@ export default function (pi: ExtensionAPI) {
   registerSwitchProjectCommand(pi, config);
   registerLearnMemoryCommand(pi);
   registerSyncMarkdownMemoriesCommand(memoryPi, dbManager, globalDir, config.projectsMemoryDir, agentRoot);
-  registerPreviewContextCommand(lazy ? pi : memoryPi, store, projectStoreRef, projectNameRef, config, standingStore);
+  registerPreviewContextCommand(lazy ? pi : memoryPi, store, projectStoreRef, projectDisplayNameRef, config, standingStore);
   if (standingStore) registerStandingPinCommand(pi, standingStore);
 
   // ── 10. Live session indexing ──
@@ -409,8 +458,12 @@ export default function (pi: ExtensionAPI) {
 
   // ── 11. SQLite session search + extended memory ──
   registerSessionSearchTool(config.sessionSearch?.variant === "anchors" ? pi : memoryPi,
-    dbManager, config.sessionSearch ?? { variant: "legacy" });
-  registerMemorySearchTool(memoryPi, dbManager, { usageTrackingEnabled: config.usageHitTrackingEnabled });
+    dbManager, config.sessionSearch ?? { variant: "legacy" },
+    { projectSelector: scopeBinding.scoped ? (value) => { scopeBinding.refresh(); return scopeBinding.selector(value); } : undefined });
+  registerMemorySearchTool(memoryPi, dbManager, {
+    usageTrackingEnabled: config.usageHitTrackingEnabled,
+    projectSelector: scopeBinding.scoped ? (value) => { scopeBinding.refresh(); return scopeBinding.selector(value); } : undefined,
+  });
   registerIndexSessionsCommand(memoryPi, config);
 
   // ── 12. Auto-index session on shutdown ──
