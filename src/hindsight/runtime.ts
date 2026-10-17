@@ -15,6 +15,7 @@ import {
 } from "./config.js";
 import { HindsightClient, type RecallMemory } from "./client.js";
 import { RetainOutbox } from "./outbox.js";
+import { MemorySecretRejectedError } from "./content.js";
 import {
   ScopedHindsightProvider,
   type RecallOutcome,
@@ -695,17 +696,26 @@ class OrchestratorRuntime {
     const rawTimestamp = (event.message as Textish).timestamp;
     const timestamp = messageTimestamp(rawTimestamp, this.clock());
     this.turnCounter++;
-    await this.provider.enqueueTurn(
-      scope,
-      {
-        sessionId,
-        turnId: `${this.turnCounter}-${timestamp}`,
-        harness: this.config.harness,
-        timestamp,
-      },
-      user,
-      assistant,
-    );
+    try {
+      await this.provider.enqueueTurn(
+        scope,
+        {
+          sessionId,
+          turnId: `${this.turnCounter}-${timestamp}`,
+          harness: this.config.harness,
+          timestamp,
+        },
+        user,
+        assistant,
+      );
+    } catch (error) {
+      if (!(error instanceof MemorySecretRejectedError)) throw error;
+      ctx.ui.notify(
+        "Automatic long-term memory save skipped: potential secret detected.",
+        "warning",
+      );
+      return;
+    }
     this.scheduleDrain(ctx);
   }
 

@@ -8,6 +8,7 @@ import { DEFAULT_CONFIG } from "../../src/hindsight/config.js";
 import { createHindsightExtension } from "../../src/hindsight/runtime.js";
 import type { ScopedHindsightProvider } from "../../src/hindsight/provider.js";
 import { tempRoot } from "../scope/fixtures.js";
+import { assertNoMemorySecrets } from "../../src/hindsight/content.js";
 
 async function fixture() {
   const root = await tempRoot("hindsight-session-isolation-");
@@ -33,6 +34,7 @@ async function fixture() {
     drain: async () => ({ completed: 0, deferred: 0, failed: 0 }),
     ensureKnowledgeViews: async () => ({ createdFolders: 0, createdPages: 0 }),
     enqueueTurn: async (scope: { scopeId: string }, _identity: unknown, user: string, assistant: string) => {
+      assertNoMemorySecrets({ user, assistant });
       writes.push({ scope: scope.scopeId, user, assistant });
     },
   } as unknown as ScopedHindsightProvider;
@@ -40,9 +42,12 @@ async function fixture() {
     registerCommand() {}, registerTool() {} };
   createHindsightExtension({ config: { ...DEFAULT_CONFIG, mode: "active", dataDir }, provider,
     scopeResolver: (cwd) => resolveScope(cwd, { dataDir }) })(pi as any);
-  const context = (cwd: string, id: string) => ({ cwd, mode: "tui", ui: { notify() {} },
+  const notifications: { message: string; level: string }[] = [];
+  const context = (cwd: string, id: string) => ({ cwd, mode: "tui", ui: {
+    notify(message: string, level: string) { notifications.push({ message, level }); },
+  },
     sessionManager: { getSessionId: () => id } });
-  return { handlers, writes, release, first: context(first, "session-first"), second: context(second, "session-second") };
+  return { handlers, writes, provider, notifications, release, first: context(first, "session-first"), second: context(second, "session-second") };
 }
 
 test("a late recall from the previous session cannot inject into the replacement session", async () => {
@@ -84,4 +89,43 @@ test("a stale callback cannot write the new session user text under the old Scop
   await f.handlers.session_shutdown({}, f.second);
   await f.handlers.turn_end({ message: { role: "assistant", content: "After shutdown" } }, f.second);
   assert.equal(f.writes.length, 1);
+});
+
+for (const source of ["user", "assistant"] as const) {
+  test(`secret-bearing ${source} text skips automatic retention without breaking turn_end`, async () => {
+    const f = await fixture();
+    const secret = "Bearer " + "x".repeat(32);
+    await f.handlers.session_start({}, f.first);
+    const before = f.notifications.length;
+    try {
+      await f.handlers.input({ text: source === "user" ? secret : "safe question", source: "interactive" }, f.first);
+      await assert.doesNotReject(() => f.handlers.turn_end({
+        message: { role: "assistant", content: source === "assistant" ? secret : "safe answer" },
+      }, f.first));
+      assert.deepEqual(f.writes, []);
+      const warnings = f.notifications.slice(before);
+      assert.equal(warnings.length, 1);
+      assert.equal(warnings[0].level, "warning");
+      assert.match(warnings[0].message, /skipped/i);
+      assert.equal(warnings[0].message.includes(secret), false);
+      await f.handlers.input({ text: "safe follow-up", source: "interactive" }, f.first);
+      await f.handlers.turn_end({ message: { role: "assistant", content: "safe reply" } }, f.first);
+      assert.deepEqual(f.writes, [{ scope: "scope_first", user: "safe follow-up", assistant: "safe reply" }]);
+    } finally {
+      await f.handlers.session_shutdown({}, f.first);
+    }
+  });
+}
+
+test("unexpected retention failures still propagate rather than being classified as secret rejections", async () => {
+  const f = await fixture();
+  const failure = new Error("unexpected storage failure");
+  f.provider.enqueueTurn = async () => { throw failure; };
+  await f.handlers.session_start({}, f.first);
+  try {
+    await f.handlers.input({ text: "safe question", source: "interactive" }, f.first);
+    await assert.rejects(() => f.handlers.turn_end({ message: { role: "assistant", content: "safe answer" } }, f.first), (error) => error === failure);
+  } finally {
+    await f.handlers.session_shutdown({}, f.first);
+  }
 });
