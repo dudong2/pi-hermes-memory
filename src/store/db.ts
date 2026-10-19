@@ -1,11 +1,12 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import { Worker } from 'node:worker_threads';
 import { SCHEMA_SQL } from './schema.js';
 import { AtomicLockCoordinator } from './atomic-lock-coordinator.js';
 import { canonicalStoragePathSync } from './canonical-storage-path.js';
 import { isBunRuntime, loadBetterSqlite3 } from './sqlite-native.js';
-import { measureLifecycleSync } from '../lifecycle-timing.js';
+import { measureLifecycle, measureLifecycleSync } from '../lifecycle-timing.js';
 import { MDSYNC_METADATA_KEY_PREFIX } from '../constants.js';
 
 type StatementLike = {
@@ -167,6 +168,7 @@ export class DatabaseManager {
   private sessionProjectResolver: ((cwd: string) => string | null) | null = null;
   private projectMemoryKeys: ReadonlySet<string> | undefined;
   private pendingOpenIntegrityScan: Promise<void> | null = null;
+  private startupIntegrityWorker: Worker | null = null;
   private quickCheckOnOpen = true;
   private activeRecoveryLease: { coordinator: AtomicLockCoordinator; key: string; token: string } | null = null;
 
@@ -318,41 +320,59 @@ export class DatabaseManager {
   }
 
   /**
-   * quick_check walks the whole DB, so open() never pays that cost: the scan
-   * runs after open returns and failures go through the same recovery used
-   * at operation time.
+   * Deferring synchronous SQLite work with a timer still blocks Pi. Scan on
+   * a separate read-only worker connection, and close it before any recovery.
    */
   private scheduleOpenIntegrityScan(db: DatabaseLike): void {
-    if (!this.quickCheckOnOpen) return;
-    if (this.pendingOpenIntegrityScan) return;
-    const scan = new Promise<void>((resolve) => {
+    if (!this.quickCheckOnOpen || this.pendingOpenIntegrityScan) return;
+    let identity: fs.Stats;
+    try { identity = fs.statSync(this.dbPath); } catch { return; }
+    const scan = measureLifecycle('database.quick-check', () => new Promise<void>((resolve) => {
+      const finish = () => {
+        if (this.pendingOpenIntegrityScan === scan) this.pendingOpenIntegrityScan = null;
+        resolve();
+      };
       setTimeout(() => {
+        if (this.db !== db) { finish(); return; }
+        let worker: Worker;
         try {
-          if (this.db !== db) {
-            // Manager closed or reopened; the newest open schedules its own
-            // scan, so skip to avoid a stale-handle recovery.
-            return;
-          }
-          measureLifecycleSync('database.quick-check', () => {
-            try {
-              this.assertIntegrityOk(db, 'quick_check', 'after open');
-            } catch (err) {
-              try {
-                this.recoverFromCorruption(err);
-              } catch {
-                // Best-effort here; at-operation withCorruptionRecovery still
-                // quarantines and rebuilds if a later statement hits the corruption.
-              }
-            }
+          worker = new Worker(new URL('./startup-integrity-worker.cjs', import.meta.url), {
+            workerData: { dbPath: this.dbPath, bun: isBunRuntime(), dev: identity.dev, ino: identity.ino },
+            // Workers use plain JS, not the host's TS loader, eval, or debugger.
+            execArgv: [],
           });
-        } finally {
-          if (this.pendingOpenIntegrityScan === scan) {
-            this.pendingOpenIntegrityScan = null;
-          }
-          resolve();
+        } catch {
+          console.warn('SQLite startup integrity worker could not start; operation-time recovery remains enabled.');
+          finish();
+          return;
         }
+        this.startupIntegrityWorker = worker;
+        let status: 'ok' | 'corrupt' | 'superseded' | 'failed' = 'failed';
+        worker.on('message', (result: { status?: string }) => {
+          if (result?.status === 'ok' || result?.status === 'corrupt' || result?.status === 'superseded') status = result.status;
+        });
+        worker.on('error', () => { status = 'failed'; });
+        worker.once('exit', (code) => {
+          if (this.startupIntegrityWorker === worker) this.startupIntegrityWorker = null;
+          // A result belongs only to the connection that scheduled it. Closing
+          // or reopening the manager invalidates late successes and failures.
+          if (this.db === db) {
+            if (code === 0 && status === 'corrupt') {
+              try {
+                const current = fs.statSync(this.dbPath);
+                if (current.dev !== identity.dev || current.ino !== identity.ino) { finish(); return; }
+                this.recoverFromCorruption(new DatabaseCorruptionError('SQLite quick_check failed after open (worker)'));
+              } catch {
+                // Operation-time recovery remains enabled if rebuilding fails.
+              }
+            } else if (code !== 0 || status === 'failed') {
+              console.warn('SQLite startup integrity check could not complete; operation-time recovery remains enabled.');
+            }
+          }
+          finish();
+        });
       }, 0);
-    });
+    }));
     this.pendingOpenIntegrityScan = scan;
   }
 
@@ -1182,10 +1202,19 @@ export class DatabaseManager {
    * Close the database connection.
    */
   close(): void {
+    const worker = this.startupIntegrityWorker;
+    this.startupIntegrityWorker = null;
+    if (worker) {
+      worker.unref();
+      void worker.terminate().catch(() => {});
+    }
     const db = this.db;
     if (db) {
       try {
-        measureLifecycleSync('database.checkpoint', () => db.exec('PRAGMA wal_checkpoint(TRUNCATE)'));
+        // An exiting read-only scan must not turn shutdown into a blocking
+        // checkpoint wait. A later normal close can truncate the WAL.
+        const checkpoint = worker ? 'PRAGMA wal_checkpoint(PASSIVE)' : 'PRAGMA wal_checkpoint(TRUNCATE)';
+        measureLifecycleSync('database.checkpoint', () => db.exec(checkpoint));
       } catch { /* best effort */ }
       try { db.close(); } catch { /* best effort — close may throw on a corrupt handle */ }
       this.db = null;
