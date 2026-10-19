@@ -252,7 +252,9 @@ export default function (pi: ExtensionAPI) {
             },
           );
         });
-        if (scopeBinding.scoped && scopeBinding.available) rebindIndexedSessions(dbManager);
+        if (scopeBinding.scoped && scopeBinding.available && ctx?.cwd) {
+          rebindIndexedSessions(dbManager, ctx.cwd);
+        }
         persistenceInitialized = true;
       } catch (error) {
         if (lazy) throw error;

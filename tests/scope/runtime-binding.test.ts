@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createProject, createScope } from "../../src/scope/catalog.js";
 import { tempRoot } from "./fixtures.js";
 
-test("real extension callbacks bind memory, skills and searches to one stable Scope", async () => {
+test("real extension callbacks bind memory, skills and searches to one stable Scope", async (t) => {
   const root = await tempRoot("scope-runtime-");
   const workspace = join(root, "old-directory-name");
   const other = join(root, "unregistered");
@@ -23,6 +23,10 @@ test("real extension callbacks bind memory, skills and searches to one stable Sc
     reviewEnabled: false, flushOnCompact: false, flushOnShutdown: false, autoConsolidate: false,
     correctionDetection: false, standingInstructionsEnabled: false,
   }));
+  const historyDir = join(root, "history");
+  await mkdir(historyDir);
+  await createScope(catalogRoot, { root: historyDir, projectId: project.projectId,
+    name: "History", scopeId: "ws_history", memoryTag: "repo:history" });
   const oldEnvironment = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = root;
   const handlers: Record<string, ((event: unknown, ctx: unknown) => Promise<unknown>)[]> = {};
@@ -37,9 +41,42 @@ test("real extension callbacks bind memory, skills and searches to one stable Sc
     sessionManager: { getSessionId: () => "runtime", getSessionFile: () => undefined, getBranch: () => [], getHeader: () => null, getEntries: () => [] } });
   const current = ctx(workspace);
   try {
+    const { DatabaseManager } = await import("../../src/store/db.js");
+    const { indexSession } = await import("../../src/store/session-indexer.js");
+    const { ProjectScopeBinding } = await import("../../src/scope/project-binding.js");
+    const database = new DatabaseManager(join(root, "pi-hermes-memory"));
+    database.setQuickCheckOnOpen(false);
+    const historySession = (id: string, cwd: string, project: string) => ({ id, cwd, project,
+      startedAt: "2026-10-01T00:00:00.000Z", endedAt: null,
+      messages: [{ id: `${id}-message`, role: "user" as const, content: "Searchable history retained",
+        timestamp: "2026-10-01T00:00:00.000Z" }] });
+    try {
+      indexSession(database, historySession("current-history", workspace, "old-directory-name"));
+      indexSession(database, historySession("other-history", historyDir, "ws_history"));
+    } finally { database.close(); }
+    const resolvedPaths: string[] = [];
+    const sessionProject = ProjectScopeBinding.prototype.sessionProject;
+    t.mock.method(ProjectScopeBinding.prototype, "sessionProject", function(this: InstanceType<typeof ProjectScopeBinding>, cwd: string) {
+      resolvedPaths.push(cwd);
+      return sessionProject.call(this, cwd);
+    });
     const { default: extension } = await import("../../src/index.js");
     extension(pi as any);
     for (const handler of handlers.session_start) await handler({}, current);
+    assert.ok(resolvedPaths.includes(workspace), "current cwd history must still be bound");
+    assert.ok(!resolvedPaths.includes(historyDir), "startup must not resolve unrelated historical paths");
+    const readDb = new DatabaseManager(join(root, "pi-hermes-memory"));
+    readDb.setQuickCheckOnOpen(false);
+    try {
+      const rows = readDb.getDb().prepare("SELECT id, project FROM sessions ORDER BY id").all();
+      assert.deepEqual(rows, [
+        { id: "current-history", project: "ws_runtime" },
+        { id: "other-history", project: "ws_history" },
+      ]);
+    } finally { readDb.close(); }
+    const history = await tools.session_search.execute("history-search", { query: "Searchable history retained",
+      project: "Product/History" }, undefined, undefined, current);
+    assert.match(JSON.stringify(history), /Searchable history retained/);
     const resources = await handlers.resources_discover[0]({ cwd: workspace }, current) as { skillPaths: string[] };
     assert.ok(resources.skillPaths.includes(join(memoryDir, "skills")));
     assert.ok(!resources.skillPaths.some((value) => value.includes("projects-memory/old-directory-name")));
