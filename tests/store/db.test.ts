@@ -182,6 +182,19 @@ describe('DatabaseManager', () => {
       assert.ok(tableNames.includes('message_fts'), 'message_fts table missing');
       assert.ok(tableNames.includes('memory_fts'), 'memory_fts table missing');
     });
+
+    it('indexes exact-content lookups within a memory scope', () => {
+      const db = dbManager.getDb();
+      for (const project of ['project IS NULL', 'project = ?']) {
+        for (const category of ['category IS NULL', 'category = ?']) {
+          const sql = `SELECT * FROM memories WHERE target = ? AND ${project} AND ${category} AND content = ? ORDER BY id ASC LIMIT 1`;
+          const params = ['failure', ...(project.endsWith('?') ? ['p'] : []), ...(category.endsWith('?') ? ['failure'] : []), 'x'];
+          const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{ detail: string }>;
+          assert.match(plan.map((row) => row.detail).join('\n'), /idx_memories_scope_content \(target=\? AND project=\? AND category=\? AND content=\?\)/, sql);
+        }
+      }
+    });
+
     it('rebuilds existing unicode61 FTS tables and preserves indexed data', () => {
       const db = dbManager.getDb();
       db.prepare(`
@@ -496,11 +509,11 @@ describe('DatabaseManager', () => {
 
       const indexes = migratedDb.prepare(`
         SELECT name FROM sqlite_master
-        WHERE type = 'index' AND name IN ('idx_memories_project', 'idx_memories_target', 'idx_memories_category')
+        WHERE type = 'index' AND name IN ('idx_memories_project', 'idx_memories_target', 'idx_memories_category', 'idx_memories_scope_content')
       `).all() as Array<{ name: string }>;
       assert.deepStrictEqual(
         indexes.map((row) => row.name).sort(),
-        ['idx_memories_category', 'idx_memories_project', 'idx_memories_target'],
+        ['idx_memories_category', 'idx_memories_project', 'idx_memories_scope_content', 'idx_memories_target'],
       );
 
       migratedManager.close();

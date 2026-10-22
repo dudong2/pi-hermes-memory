@@ -51,6 +51,7 @@ import { registerLearnMemoryCommand } from "./handlers/learn-memory.js";
 import { migrateThenSyncMarkdownMemories, registerSyncMarkdownMemoriesCommand } from "./handlers/sync-markdown-memories.js";
 import { registerPreviewContextCommand } from "./handlers/preview-context.js";
 import { registerStandingPinCommand } from "./handlers/standing-pin.js";
+import { isMemoryChildProcess } from "./handlers/pi-child-process.js";
 import { StandingInstructions } from "./store/standing-instructions.js";
 import { STANDING_FILE } from "./constants.js";
 import { loadConfig } from "./config.js";
@@ -345,7 +346,7 @@ export default function (pi: ExtensionAPI) {
 
   // ── 2. Inject memory policy by default; legacy mode keeps full frozen memory blocks ──
   pi.on("before_agent_start", async (event, _ctx) => {
-    const promptContext = await buildPromptContext(config, store, projectStoreRef(), projectDisplayNameRef(), standingStore);
+    const promptContext = await buildPromptContext(config, store, projectStoreRef(), projectDisplayNameRef(), standingStore, isMemoryChildProcess());
     if (!promptContext) return;
 
     // pi 0.86+ hands handlers a normalized clone of these options and re-renders

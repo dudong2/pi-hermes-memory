@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { buildPromptContext } from "../../src/prompt-context.js";
-import { MEMORY_POLICY_PROMPT, MEMORY_POLICY_PROMPT_COMPACT } from "../../src/constants.js";
+import { MEMORY_POLICY_PROMPT, MEMORY_POLICY_PROMPT_COMPACT, MEMORY_WRITE_TOOL_NAMES } from "../../src/constants.js";
 
 describe("buildPromptContext", () => {
   const store = {
@@ -162,5 +162,58 @@ describe("buildPromptContext", () => {
     const result = await buildPromptContext({ memoryMode: "policy-only" }, store, projectStore, "demo");
 
     assert.strictEqual(result, MEMORY_POLICY_PROMPT);
+  });
+
+  it("omits the memory policy for child sessions and keeps standing instructions", async () => {
+    const result = await buildPromptContext(
+      { memoryMode: "policy-only" },
+      store,
+      projectStore,
+      "demo",
+      standing,
+      true,
+    );
+
+    assert.strictEqual(result, "<standing-instructions>\n1. never run find /\n</standing-instructions>");
+    assert.doesNotMatch(result, /memory_search/);
+  });
+
+  it("skips custom policy text for child sessions", async () => {
+    const result = await buildPromptContext(
+      {
+        memoryMode: "policy-only",
+        memoryPolicyStyle: "custom",
+        memoryPolicyCustomText: "<memory-policy>Use local custom policy.</memory-policy>",
+      },
+      store,
+      projectStore,
+      "demo",
+      null,
+      true,
+    );
+
+    assert.strictEqual(result, "");
+  });
+
+  it("keeps legacy-inject output unchanged for child sessions", async () => {
+    const result = await buildPromptContext(
+      { memoryMode: "legacy-inject" },
+      store,
+      projectStore,
+      "demo",
+      null,
+      true,
+    );
+
+    assert.strictEqual(result, "<memory-context>MEMORY</memory-context>\n\n<memory-context>PROJECT demo</memory-context>");
+  });
+});
+
+describe("memory policy text", () => {
+  it("advertises every child write tool in both policy texts", () => {
+    for (const name of MEMORY_WRITE_TOOL_NAMES) {
+      assert.ok(MEMORY_POLICY_PROMPT.includes(`- ${name}:`), `MEMORY_POLICY_PROMPT lacks "- ${name}:"`);
+      assert.ok(MEMORY_POLICY_PROMPT_COMPACT.includes(`- ${name}:`), `MEMORY_POLICY_PROMPT_COMPACT lacks "- ${name}:"`);
+    }
   });
 });

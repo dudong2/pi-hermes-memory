@@ -36,13 +36,19 @@ export async function buildPromptContext(
   projectStore: MemoryStore | null,
   projectName: string,
   standing: StandingInstructions | null = null,
+  forChild = false,
 ): Promise<string> {
   const standingBlock = standing?.formatForSystemPrompt() ?? "";
 
   if (config.memoryMode === "policy-only") {
+    // Children run with only the memory write tools, so the policy would advertise
+    // tools they cannot call (memory_search, session_search, skill_manage).
+    // Standing instructions still apply.
+    if (forChild) return standingBlock;
     return [resolveMemoryPolicyPrompt(config), standingBlock].filter(Boolean).join("\n\n");
   }
 
+  // Legacy blocks are memory data, not policy, so children keep them.
   const memoryBlock = store.formatForSystemPrompt();
   const projectBlock = projectStore ? projectStore.formatProjectBlock(projectName) : "";
 

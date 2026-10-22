@@ -9,8 +9,10 @@ if (!cancellationPath || !command || !Number.isFinite(timeoutMs) || timeoutMs <=
   process.exit(2);
 }
 
+// The extension reads this marker to keep the interactive memory policy out of child sessions.
 const child = spawn(command, args, {
   detached: process.platform !== "win32",
+  env: { ...process.env, PI_HERMES_MEMORY_CHILD: "1" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 

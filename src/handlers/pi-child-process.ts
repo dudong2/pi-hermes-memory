@@ -4,8 +4,10 @@ import * as os from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import stripAnsi from "strip-ansi";
 import type { MemoryConfig, ThinkingLevel } from "../types.js";
 import { AGENT_ROOT } from "../paths.js";
+import { MEMORY_WRITE_TOOL_NAMES } from "../constants.js";
 
 type ChildLlmConfig = Pick<MemoryConfig, "llmModelOverride" | "llmThinkingOverride" | "childExtensionPaths">;
 
@@ -14,6 +16,16 @@ interface PiExecResult {
   stdout?: string;
   stderr?: string;
   killed?: boolean;
+}
+
+export function cleanChildStderr(stderr?: string): string {
+  const originalStderr = stripAnsi(stderr ?? "").trim();
+  return originalStderr
+    .split(/\r?\n/)
+    // Pi model-resolver.js emits these model-scope warnings during child startup.
+    .filter((line) => !line.startsWith("Warning: No models match pattern "))
+    .join("\n")
+    .trim() || originalStderr;
 }
 
 export interface ChildPiModel {
@@ -51,6 +63,17 @@ const WATCHDOG_EXIT_GRACE_MS = 5000;
 const CHILD_PROCESS_WATCHDOG_PATH = fileURLToPath(
   new URL("./child-process-watchdog.mjs", import.meta.url),
 );
+
+// child-process-watchdog.mjs sets this name as a literal because it runs as
+// plain node and cannot import this module. Only children spawned through the
+// watchdog carry it.
+export const MEMORY_CHILD_ENV_VAR = "PI_HERMES_MEMORY_CHILD";
+export function isMemoryChildProcess(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return env[MEMORY_CHILD_ENV_VAR] === "1";
+}
+
 export interface ChildPiInvocation {
   command: string;
   args: string[];
@@ -256,6 +279,23 @@ function appendOwnExtensionArgs(args: string[], config: ChildLlmConfig): void {
   for (const extensionSource of childExtensionSources(config)) {
     args.push("-e", extensionSource);
   }
+  // Host-enforced tool allowlist for memory children (#275): review, flush,
+  // correction-save and consolidation children only ever write through the
+  // three memory tools, so every other tool — file writers like
+  // edit/write/bash as well as skill_manage — stays unreachable in the
+  // subprocess. A weak fallback model can therefore not modify the user's
+  // repo from a journal-less child. Enforced by pi's --tools and --exclude-tools
+  // (built-in and extension tools alike), not by the prompt. Placed on this shared helper
+  // because both argv builders (primary and retry-without-overrides) call
+  // it, so the two stay in sync by construction. The child's cwd stays the
+  // session cwd: the memory tools bind the project store from it, and with
+  // file tools unreachable the cwd is no longer the risk.
+  args.push("--tools", MEMORY_WRITE_TOOL_NAMES.join(","));
+  // Exclude MCP explicitly: on pi 1.0.4+ --tools keeps MCP tools unless an
+  // mcp__ entry is listed, and a builtin:mcp entry in childExtensionPaths can
+  // load them past --no-extensions. Before 1.0.4 --tools already dropped them,
+  // the pattern is a no-op, and --no-mcp exits.
+  args.push("--exclude-tools", "mcp__*");
 }
 
 export function buildChildPiPromptArgs(

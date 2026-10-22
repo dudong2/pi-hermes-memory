@@ -4,7 +4,7 @@
  * See PLAN.md → "Hermes Source File Reference Map" for source lines.
  *
  * Default transport: in-process complete() side-channel (preserves parent LLM cache).
- * Fallback: pi.exec("pi", ["-p", ...]) subprocess when direct path is unavailable.
+ * Fallback when the direct transport is unavailable or fails: a `pi -p` child built by `execChildPrompt` in `pi-child-process.ts`, behind the process-tree watchdog.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -18,7 +18,7 @@ import { DatabaseManager } from "../store/db.js";
 import type { MemoryConfig } from "../types.js";
 import type { EnsureMemoryReady } from "../memory-initialization.js";
 import { applyRecentMessageLimit, collectMessageParts } from "./message-parts.js";
-import { execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
+import { cleanChildStderr, execChildPrompt, resolveChildPiModel } from "./pi-child-process.js";
 import { REVIEW_COMPLETION_TIMEOUT_MS, runDirectMemoryCompletion, usesDirectTransport, type DirectReviewResult } from "./review-memory-ops.js";
 
 import { resolveProjectName, resolveProjectStore, type ProjectNameRef, type ProjectStoreRef } from "../project-context.js";
@@ -337,7 +337,7 @@ export function setupBackgroundReview(
       if (subprocessResult.code === 0) {
         notifyIfSaved(shouldNotifySubprocess(subprocessResult.stdout));
       } else if (directFailure) {
-        const subprocessDetail = subprocessResult.stderr?.trim() || subprocessResult.stdout?.trim()
+        const subprocessDetail = cleanChildStderr(subprocessResult.stderr) || subprocessResult.stdout?.trim()
           || `exit code ${subprocessResult.code}`;
         notifyTransportFailure(directFailure, subprocessDetail);
       }

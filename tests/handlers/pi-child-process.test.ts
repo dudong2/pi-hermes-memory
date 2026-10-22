@@ -5,11 +5,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { MEMORY_WRITE_TOOL_NAMES } from "../../src/constants.js";
 import {
   buildChildPiPromptArgs,
+  cleanChildStderr,
   detectAuthAdapterExtensionPaths,
   execChildPrompt,
   inheritedExtensionArgs,
+  isMemoryChildProcess,
+  MEMORY_CHILD_ENV_VAR,
   resolveChildPiInvocation,
   resolveWatchedChildPiInvocation,
 } from "../../src/handlers/pi-child-process.js";
@@ -26,6 +30,9 @@ const OWN_EXTENSION_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../src/index.ts",
 );
+
+// Every child argv shape must carry these tool flags (#275).
+const TOOL_ARGS = ["--tools", MEMORY_WRITE_TOOL_NAMES.join(","), "--exclude-tools", "mcp__*"];
 
 // Adapter detection scans the real sibling/agent node_modules trees, so a
 // contributor with a provider auth adapter installed gets extra -e args in
@@ -47,6 +54,17 @@ describe("inheritedExtensionArgs", () => {
       inheritedExtensionArgs(["--extension=src/index.ts"]),
       ["--extension=src/index.ts"],
     );
+  });
+});
+
+describe("isMemoryChildProcess", () => {
+  it("is true when the watchdog marker is 1", () => {
+    assert.strictEqual(isMemoryChildProcess({ [MEMORY_CHILD_ENV_VAR]: "1" }), true);
+  });
+
+  it("is false when the marker is missing or 0", () => {
+    assert.strictEqual(isMemoryChildProcess({}), false);
+    assert.strictEqual(isMemoryChildProcess({ [MEMORY_CHILD_ENV_VAR]: "0" }), false);
   });
 });
 
@@ -269,20 +287,20 @@ describe("buildChildPiPromptArgs", () => {
   it("uses --no-extensions and only passes hermes-memory extension", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", {}, []),
-      ["-p", "--no-session", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", ...EXT_ARGS, ...TOOL_ARGS, "hello"],
     );
   });
 
   it("adds a model override and defaults thinking to off", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", { llmModelOverride: "openrouter/deepseek/deepseek-v4-flash" }, []),
-      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, ...TOOL_ARGS, "hello"],
     );
   });
   it("inherits the active provider/model when no override is configured", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", {}, [], { provider: "local-llama", id: "local-9b" }),
-      ["-p", "--no-session", "--model", "local-llama/local-9b", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", "--model", "local-llama/local-9b", ...EXT_ARGS, ...TOOL_ARGS, "hello"],
     );
   });
 
@@ -294,7 +312,7 @@ describe("buildChildPiPromptArgs", () => {
         [],
         { provider: "local-llama", id: "local-9b" },
       ),
-      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, ...TOOL_ARGS, "hello"],
     );
   });
 
@@ -302,14 +320,14 @@ describe("buildChildPiPromptArgs", () => {
   it("allows thinking overrides without a model override", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", { llmThinkingOverride: "low" }, []),
-      ["-p", "--no-session", "--thinking", "low", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", "--thinking", "low", ...EXT_ARGS, ...TOOL_ARGS, "hello"],
     );
   });
 
   it("ignores missing inherited extension paths", () => {
     assert.deepStrictEqual(
       buildChildPiPromptArgs("hello", {}, ["-e", "src/index.ts"]),
-      ["-p", "--no-session", ...EXT_ARGS, "hello"],
+      ["-p", "--no-session", ...EXT_ARGS, ...TOOL_ARGS, "hello"],
     );
   });
 
@@ -341,6 +359,7 @@ describe("buildChildPiPromptArgs", () => {
           "-e", "git:github.com/example/provider-extension@v1",
           "-e", "npm:@example/provider-extension@1.0.0",
           ...DETECTED_ADAPTER_ARGS,
+          ...TOOL_ARGS,
           "hello",
         ],
       );
@@ -540,6 +559,30 @@ describe("execChildPrompt", () => {
     assert.equal(result.code, 124);
     assert.match(result.stderr, /timed out after 100ms/i);
     assert.ok(Date.now() - startedAt < 3000, "watchdog must enforce a bounded hard stop");
+  });
+
+  it("marks the watched child with the memory child env marker", async () => {
+    const watchdogPath = fileURLToPath(
+      new URL("../../src/handlers/child-process-watchdog.mjs", import.meta.url),
+    );
+    // The probe runs in a separate node process, so the constant's value is inlined as a literal.
+    const probe = `process.stdout.write(process.env[${JSON.stringify(MEMORY_CHILD_ENV_VAR)}] ?? "")`;
+    const stdout = await new Promise<string>((resolve, reject) => {
+      const child = spawn(process.execPath, [
+        watchdogPath,
+        "10000",
+        "-",
+        process.execPath,
+        "-e",
+        probe,
+      ], { stdio: ["ignore", "pipe", "ignore"] });
+      let output = "";
+      child.stdout.on("data", (chunk) => { output += chunk.toString(); });
+      child.on("error", reject);
+      child.on("close", () => resolve(output));
+    });
+
+    assert.equal(stdout, "1");
   });
 
   it("terminates the child tree when its cancellation marker appears", async () => {
@@ -778,9 +821,9 @@ describe("execChildPrompt", () => {
     const promptReference = logicalCalls[0].at(-1)!;
     assert.match(promptReference, /^@/);
     assert.deepStrictEqual(logicalCalls, [
-      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, promptReference],
+      ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, ...TOOL_ARGS, promptReference],
       // Retry drops configured overrides but preserves the active session model.
-      ["-p", "--no-session", "--model", "local-llama/local-9b", ...EXT_ARGS, promptReference],
+      ["-p", "--no-session", "--model", "local-llama/local-9b", ...EXT_ARGS, ...TOOL_ARGS, promptReference],
     ]);
   });
 
@@ -830,8 +873,8 @@ describe("execChildPrompt", () => {
       const promptReference = calls[0].args.at(-1)!;
       assert.match(promptReference, /^@/);
       assert.deepStrictEqual(calls.map(logicalChildArgs), [
-        ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, promptReference],
-        ["-p", "--no-session", ...EXT_ARGS, promptReference],
+        ["-p", "--no-session", "--model", "openrouter/deepseek/deepseek-v4-flash", "--thinking", "off", ...EXT_ARGS, ...TOOL_ARGS, promptReference],
+        ["-p", "--no-session", ...EXT_ARGS, ...TOOL_ARGS, promptReference],
       ]);
     } finally {
       if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
@@ -901,5 +944,105 @@ describe("execChildPrompt", () => {
 
     assert.strictEqual(result.code, 1);
     assert.strictEqual(calls.length, 1);
+  });
+
+  it("carries the memory tool allowlist exactly once on every argv shape, including the retry that drops overrides", async () => {
+    const calls: string[][] = [];
+    const pi = {
+      exec: async (_cmd: string, args: string[]) => {
+        calls.push(args);
+        return calls.length === 1
+          ? { code: 1, stdout: "", stderr: "model not found" }
+          : { code: 0, stdout: "ok", stderr: "" };
+      },
+    };
+
+    const expectedAllowlist = MEMORY_WRITE_TOOL_NAMES.join(",");
+
+    const assertFlagOnce = (args: string[], flag: string, value: string): void => {
+      const flagIndexes = args.reduce<number[]>((acc, arg, i) => (arg === flag ? [...acc, i] : acc), []);
+      assert.strictEqual(flagIndexes.length, 1, `${flag} should appear exactly once, got ${flagIndexes.length}`);
+      assert.strictEqual(args[flagIndexes[0] + 1], value);
+    };
+    const assertToolFlags = (args: string[]): void => {
+      assertFlagOnce(args, "--tools", expectedAllowlist);
+      assertFlagOnce(args, "--exclude-tools", "mcp__*");
+    };
+
+    // All primary-builder shapes.
+    for (const shape of [
+      buildChildPiPromptArgs("p", {}, []),
+      buildChildPiPromptArgs("p", { llmModelOverride: "openrouter/deepseek/deepseek-v4-flash", llmThinkingOverride: "off" }, []),
+      buildChildPiPromptArgs("p", {}, [], { provider: "local-llama", id: "local-9b" }),
+    ]) {
+      assertToolFlags(shape);
+    }
+
+    // Primary attempt fails on model resolution → retry builder drops the
+    // overrides; the allowlist must survive on both argv shapes.
+    await execChildPrompt(pi as any, "hello", {
+      llmModelOverride: "missing/model",
+    }, { timeoutMs: 30000, retryWithoutOverrides: true });
+
+    assert.strictEqual(calls.length, 2, "override failure should retry once");
+    assertToolFlags(calls[0]);
+    assertToolFlags(calls[1]);
+  });
+});
+
+describe("cleanChildStderr", () => {
+  const scopeWarnings = Array.from(
+    { length: 8 },
+    (_, index) => `Warning: No models match pattern "test/model-${index}"`,
+  ).join("\n");
+
+  const cases: Array<{ name: string; stderr: string; expected: string }> = [
+    {
+      name: "reports an HTTP 402 after long model-scope warnings",
+      stderr: `${scopeWarnings}\nError: HTTP402 Credit balance is empty`,
+      expected: "Error: HTTP402 Credit balance is empty",
+    },
+    {
+      name: "strips ANSI codes before filtering model-scope warnings",
+      stderr: `\u001b[33mWarning: No models match pattern "test/model"\u001b[39m\n\u001b[31mError: HTTP402 Credit balance is empty\u001b[39m`,
+      expected: "Error: HTTP402 Credit balance is empty",
+    },
+    {
+      name: "preserves model-scope warnings when they are the only diagnostics",
+      stderr: 'Warning: No models match pattern "test/model"',
+      expected: 'Warning: No models match pattern "test/model"',
+    },
+    {
+      name: "retains unrelated warning lines",
+      stderr: "Warning: Extension discovery used its fallback path\nError: HTTP402 Credit balance is empty",
+      expected: "Warning: Extension discovery used its fallback path\nError: HTTP402 Credit balance is empty",
+    },
+    {
+      name: "does not discard model-not-found errors",
+      stderr: `${scopeWarnings}\nError: Model not found`,
+      expected: "Error: Model not found",
+    },
+    {
+      name: "returns empty stderr unchanged for caller-side fallback",
+      stderr: "",
+      expected: "",
+    },
+    {
+      name: "preserves long cleaned stderr for caller-side formatting",
+      stderr: `Warning: No models match pattern "test/model"\nError: ${"x".repeat(250)}`,
+      expected: `Error: ${"x".repeat(250)}`,
+    },
+  ];
+
+  for (const { name, stderr, expected } of cases) {
+    it(name, () => {
+      const cleaned = cleanChildStderr(stderr);
+      assert.equal(cleaned, expected);
+      if (expected.length > 200) assert.ok(cleaned.length > 200);
+    });
+  }
+
+  it("returns an empty string when stderr is absent", () => {
+    assert.equal(cleanChildStderr(), "");
   });
 });
