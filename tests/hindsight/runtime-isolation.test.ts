@@ -22,11 +22,13 @@ async function fixture() {
   await createScope(dataDir, { root: second, projectId: project.projectId, name: "Second", scopeId: "scope_second" });
   const handlers: Record<string, (event: any, ctx: any) => Promise<any>> = {};
   const writes: { scope: string; user: string; assistant: string }[] = [];
+  const recalls: string[] = [];
   let release!: () => void;
   const deferred = new Promise<void>((done) => { release = done; });
   const provider = {
     bankId: () => "test-bank",
     recall: async (query: string, scope: { scopeId: string }) => {
+      recalls.push(query);
       if (query === "first question") await deferred;
       return { memories: [{ id: scope.scopeId, text: `Reference from ${scope.scopeId}` }],
         plan: { tags: [], tagGroups: [], expandedScopes: [], expandedRepositories: [], workspaceWide: false } };
@@ -47,7 +49,7 @@ async function fixture() {
     notify(message: string, level: string) { notifications.push({ message, level }); },
   },
     sessionManager: { getSessionId: () => id } });
-  return { handlers, writes, provider, notifications, release, first: context(first, "session-first"), second: context(second, "session-second") };
+  return { handlers, writes, recalls, provider, notifications, release, first: context(first, "session-first"), second: context(second, "session-second") };
 }
 
 test("a late recall from the previous session cannot inject into the replacement session", async () => {
@@ -73,6 +75,46 @@ test("recall appends to structured prompt options without flattening sections", 
   assert.match(systemPromptOptions.appendSystemPrompt, /scope_first/);
   assert.match(systemPromptOptions.appendSystemPrompt, /^existing/);
   await f.handlers.session_shutdown({}, f.first);
+});
+
+for (const withPendingRecall of [false, true]) {
+  test(`custom-message runs skip recall even with pending user recall: ${withPendingRecall}`, async () => {
+    const f = await fixture();
+    await f.handlers.session_start({}, f.first);
+    try {
+      if (withPendingRecall) {
+        await f.handlers.input({ text: "second question", source: "interactive" }, f.first);
+      }
+      const before = [...f.recalls];
+      const systemPromptOptions = { sections: [{ name: "base", content: "base" }], appendSystemPrompt: "existing" };
+      const result = await f.handlers.before_agent_start({
+        type: "before_agent_start",
+        messageType: "custom",
+        message: { role: "custom", customType: "subagent-result", content: "Child finished", display: false, timestamp: Date.now() },
+        systemPrompt: "base",
+        systemPromptOptions,
+      }, f.first);
+      assert.equal(result, undefined);
+      assert.deepEqual(f.recalls, before);
+      assert.equal(systemPromptOptions.appendSystemPrompt, "existing");
+    } finally {
+      await f.handlers.session_shutdown({}, f.first);
+    }
+  });
+}
+
+test("user-message runs still recall using their trimmed prompt", async () => {
+  const f = await fixture();
+  await f.handlers.session_start({}, f.first);
+  try {
+    const result = await f.handlers.before_agent_start({
+      type: "before_agent_start", messageType: "user", prompt: "  second question  ", systemPrompt: "base",
+    }, f.first);
+    assert.deepEqual(f.recalls, ["second question"]);
+    assert.match(result.systemPrompt, /scope_first/);
+  } finally {
+    await f.handlers.session_shutdown({}, f.first);
+  }
 });
 
 test("a stale callback cannot write the new session user text under the old Scope", async () => {

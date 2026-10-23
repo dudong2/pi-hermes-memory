@@ -641,6 +641,9 @@ class OrchestratorRuntime {
     ctx: ExtensionContext,
   ) {
     if (this.config.mode !== "active" || !this.currentContext(ctx)) return;
+    // Pi 1.4 also starts runs from custom messages, which have no user prompt.
+    // Do not recall against the custom payload or reuse an earlier user's input.
+    if (!("prompt" in event) || typeof event.prompt !== "string") return;
     const epoch = this.sessionEpoch;
     const prompt = event.prompt.trim();
     if (!prompt) return;
